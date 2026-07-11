@@ -1,5 +1,6 @@
-"""Constants for integration_blueprint."""
+"""Constants for the Adaptive Cover integration."""
 
+from copy import deepcopy
 import logging
 
 DOMAIN = "adaptive_cover"
@@ -80,6 +81,8 @@ CONF_NIGHT_PURGE_ENABLED = "night_purge_enabled"
 CONF_NIGHT_PURGE_END_TIME = "night_purge_end_time"
 CONF_THERMAL_HOLD_AFTER_SUN = "thermal_hold_after_sun"
 CONF_THERMAL_HOLD_POSITION = "thermal_hold_position"
+CONF_THERMAL_HOLD_DURATION = "thermal_hold_duration"
+CONF_THERMAL_HOLD_RELEASE_DELTA = "thermal_hold_release_delta"
 CONF_LUX_THRESHOLD_ON = "lux_threshold_on"
 CONF_LUX_THRESHOLD_OFF = "lux_threshold_off"
 CONF_IRRADIANCE_THRESHOLD_ON = "irradiance_threshold_on"
@@ -205,6 +208,8 @@ DEFAULT_OPTIONS = {
     CONF_PURGE_POS: 15,
     CONF_THERMAL_HOLD_AFTER_SUN: False,
     CONF_THERMAL_HOLD_POSITION: 30,
+    CONF_THERMAL_HOLD_DURATION: 120,
+    CONF_THERMAL_HOLD_RELEASE_DELTA: 1.0,
     CONF_RAIN_NIGHT_ONLY: False,
     CONF_WINDOW_ENTITY: None,
     CONF_WINDOW_OPEN_ACTION: WINDOW_ACTION_PAUSE,
@@ -222,3 +227,62 @@ class SensorType:
     BLIND = "cover_blind"
     AWNING = "cover_awning"
     TILT = "cover_tilt"
+
+
+def normalize_options(options: dict | None) -> dict:
+    """Return a complete, independent option dictionary."""
+    normalized = deepcopy(DEFAULT_OPTIONS)
+    normalized.update(dict(options or {}))
+    if not isinstance(normalized.get(CONF_ENTITIES), list):
+        normalized[CONF_ENTITIES] = []
+    if not isinstance(normalized.get(CONF_MANUAL_OVERRIDE_DURATION), dict):
+        normalized[CONF_MANUAL_OVERRIDE_DURATION] = deepcopy(
+            DEFAULT_OPTIONS[CONF_MANUAL_OVERRIDE_DURATION]
+        )
+    if not normalized.get(CONF_NIGHT_PURGE_END_TIME):
+        normalized[CONF_NIGHT_PURGE_END_TIME] = DEFAULT_OPTIONS[
+            CONF_NIGHT_PURGE_END_TIME
+        ]
+    return normalized
+
+
+def validate_options(options: dict | None) -> list[str]:
+    """Return cross-field validation errors for persisted or imported options."""
+    values = normalize_options(options)
+    errors: list[str] = []
+
+    temp_low = values[CONF_TEMP_LOW]
+    temp_high = values[CONF_TEMP_HIGH]
+    if temp_low is not None and temp_high is not None and temp_low >= temp_high:
+        errors.append("temp_low_must_be_lower_than_temp_high")
+    lux_off = values[CONF_LUX_THRESHOLD_OFF]
+    lux_on = values[CONF_LUX_THRESHOLD_ON]
+    if lux_off is not None and lux_on is not None and lux_off > lux_on:
+        errors.append("lux_off_must_not_exceed_on")
+    irradiance_off = values[CONF_IRRADIANCE_THRESHOLD_OFF]
+    irradiance_on = values[CONF_IRRADIANCE_THRESHOLD_ON]
+    if (
+        irradiance_off is not None
+        and irradiance_on is not None
+        and irradiance_off > irradiance_on
+    ):
+        errors.append("irradiance_off_must_not_exceed_on")
+
+    min_position = values[CONF_MIN_POSITION]
+    max_position = values[CONF_MAX_POSITION]
+    if min_position is not None and max_position is not None and min_position > max_position:
+        errors.append("min_position_must_not_exceed_max_position")
+
+    source = values[CONF_INTERP_LIST] or []
+    target = values[CONF_INTERP_LIST_NEW] or []
+    if values[CONF_INTERP] and len(source) != len(target):
+        errors.append("interpolation_lists_must_have_equal_length")
+    try:
+        source_values = list(map(int, source))
+        list(map(int, target))
+        if source_values and sorted(source_values) != source_values:
+            errors.append("interpolation_source_must_be_sorted")
+    except (TypeError, ValueError):
+        errors.append("interpolation_values_must_be_integers")
+
+    return errors

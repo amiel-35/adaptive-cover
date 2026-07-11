@@ -383,6 +383,8 @@ class AdaptiveCoverScheduleSensorEntity(
     _attr_should_poll = False
     _attr_icon = "mdi:calendar-clock"
     _attr_translation_key = "schedule"
+    _attr_device_class = SensorDeviceClass.ENUM
+    _attr_options = ["active", "disabled", "outside_schedule"]
 
     def __init__(
         self, unique_id: str, hass, config_entry, name: str, coordinator: AdaptiveDataUpdateCoordinator,
@@ -409,7 +411,11 @@ class AdaptiveCoverScheduleSensorEntity(
     @property
     def native_value(self) -> str:
         """Return the schedule sensor state."""
-        return "Aktywny"
+        if not self.coordinator.control_toggle:
+            return "disabled"
+        if self.coordinator.adaptive_movement_allowed:
+            return "active"
+        return "outside_schedule"
 
     @property
     def device_info(self) -> DeviceInfo:

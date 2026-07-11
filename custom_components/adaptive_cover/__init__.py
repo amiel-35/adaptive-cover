@@ -11,13 +11,12 @@ from homeassistant.helpers.event import (
     async_track_state_change_event,
 )
 import homeassistant.helpers.config_validation as cv
-from copy import deepcopy
 import json
 import os
+from pathlib import Path
 import voluptuous as vol
 
 from .const import (
-    DEFAULT_OPTIONS,
     CONF_END_ENTITY,
     CONF_ENTITIES,
     CONF_PRESENCE_ENTITY,
@@ -33,6 +32,8 @@ from .const import (
     CONF_WIND_ENTITY,
     DOMAIN,
     _LOGGER,
+    normalize_options,
+    validate_options,
 )
 from .coordinator import AdaptiveDataUpdateCoordinator
 
@@ -42,9 +43,14 @@ CONF_SUN = ["sun.sun"]
 
 def _normalize_options(options: dict | None) -> dict:
     """Zwróć opcje ze wszystkimi znanymi kluczami i zachowaj zapisane wartości."""
-    normalized = deepcopy(DEFAULT_OPTIONS)
-    normalized.update(dict(options or {}))
-    return normalized
+    return normalize_options(options)
+
+
+def _config_file_path(hass: HomeAssistant, filename: str) -> str:
+    """Resolve a service filename without allowing writes outside /config."""
+    if Path(filename).name != filename:
+        raise ValueError("Filename must not contain a directory path")
+    return hass.config.path(filename)
 
 
 def _json_safe(value):
@@ -110,6 +116,10 @@ def _cover_diagnostics(
     cover_type = getattr(coordinator, "_cover_type", None)
     manager = getattr(coordinator, "manager", None)
     target_position_int = _int_position(target_position)
+    if coordinator is not None and target_position_int is not None:
+        target_position_int = coordinator._target_for_entity(
+            entity_id, target_position_int
+        )
     movement_checks = {}
 
     if coordinator is not None:
@@ -132,7 +142,7 @@ def _cover_diagnostics(
         "ha_state": (snapshot or {}).get("state"),
         "friendly_name": ((snapshot or {}).get("attributes") or {}).get("friendly_name"),
         "current_position": _cover_position_from_snapshot(snapshot, cover_type),
-        "target_position": target_position,
+        "target_position": target_position_int,
         "cover_status": (
             getattr(manager, "cover_status", {}).get(entity_id)
             if manager is not None
@@ -143,8 +153,18 @@ def _cover_diagnostics(
             if manager is not None
             else None
         ),
+        "status_reason": (
+            getattr(manager, "status_reason", {}).get(entity_id)
+            if manager is not None
+            else None
+        ),
         "last_service_call": (
             getattr(manager, "last_service_call", {}).get(entity_id)
+            if manager is not None
+            else None
+        ),
+        "last_service_error": (
+            getattr(manager, "last_service_error", {}).get(entity_id)
             if manager is not None
             else None
         ),
@@ -163,22 +183,24 @@ def _cover_diagnostics(
     }
 
 
-async def async_setup(hass: HomeAssistant, config: dict) -> bool:
+async def async_setup(hass: HomeAssistant, config: dict) -> bool:  # noqa: C901
     """Set up the Adaptive Cover component."""
 
     async def export_config(call: ServiceCall) -> None:
         """Export all config entries to a JSON file."""
         filename = call.data.get("filename", "adaptive_cover_settings.json")
-        filepath = hass.config.path(filename)
+        filepath = _config_file_path(hass, filename)
 
-        export_data = {}
+        entries = {}
         for entry in hass.config_entries.async_entries(DOMAIN):
-            export_data[entry.entry_id] = {
+            entries[entry.entry_id] = {
                 "entry_id": entry.entry_id,
                 "title": entry.title,
                 "data": dict(entry.data),
                 "options": _normalize_options(entry.options),
             }
+
+        export_data = {"schema_version": 3, "entries": entries}
 
         def write_file():
             with open(filepath, "w", encoding="utf-8") as f:
@@ -190,7 +212,7 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     async def import_config(call: ServiceCall) -> None:
         """Import config entries from a JSON file."""
         filename = call.data.get("filename", "adaptive_cover_settings.json")
-        filepath = hass.config.path(filename)
+        filepath = _config_file_path(hass, filename)
 
         def read_file():
             if not os.path.exists(filepath):
@@ -204,14 +226,40 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
             _LOGGER.error("Import file not found: %s", filepath)
             return
 
-        updated_entries = []
+        stored_entries = import_data.get("entries", import_data)
+        if not isinstance(stored_entries, dict):
+            _LOGGER.error("Invalid Adaptive Cover import structure")
+            return
+
+        invalid_entries = {}
+        cover_owners: dict[str, str] = {}
+        for stored_id, stored_data in stored_entries.items():
+            if not isinstance(stored_data, dict):
+                invalid_entries[stored_id] = ["entry_must_be_an_object"]
+                continue
+            errors = validate_options(stored_data.get("options"))
+            for cover in _normalize_options(stored_data.get("options")).get(
+                CONF_ENTITIES, []
+            ):
+                if cover in cover_owners:
+                    errors.append(
+                        f"cover_assigned_to_multiple_entries:{cover_owners[cover]}:{cover}"
+                    )
+                else:
+                    cover_owners[cover] = stored_id
+            if errors:
+                invalid_entries[stored_id] = errors
+        if invalid_entries:
+            _LOGGER.error("Adaptive Cover import rejected: %s", invalid_entries)
+            return
+
         current_entries = hass.config_entries.async_entries(DOMAIN)
         for entry in current_entries:
             matched_data = None
-            if entry.entry_id in import_data:
-                matched_data = import_data[entry.entry_id]
+            if entry.entry_id in stored_entries:
+                matched_data = stored_entries[entry.entry_id]
             else:
-                for _stored_id, stored_data in import_data.items():
+                for _stored_id, stored_data in stored_entries.items():
                     if stored_data.get("title") == entry.title:
                         matched_data = stored_data
                         break
@@ -225,15 +273,10 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
                         data=new_data,
                         options=new_options,
                     )
-                    updated_entries.append(entry.entry_id)
-
-        for entry_id in updated_entries:
-            if entry_id in hass.data.get(DOMAIN, {}):
-                await hass.config_entries.async_reload(entry_id)
 
         current_entry_ids = {entry.entry_id for entry in current_entries}
         current_titles = {entry.title for entry in current_entries}
-        for stored_id, stored_data in import_data.items():
+        for stored_id, stored_data in stored_entries.items():
             if stored_id not in current_entry_ids and stored_data.get("title") not in current_titles:
                 _LOGGER.warning(
                     "Skipped Adaptive Cover backup entry %s (%s): no matching config entry",
@@ -246,12 +289,12 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         """Export current config, runtime decisions and related HA states."""
         filename = call.data.get("filename", "adaptive_cover_diagnostics.json")
         refresh = call.data.get("refresh", True)
-        filepath = hass.config.path(filename)
+        filepath = _config_file_path(hass, filename)
 
         export_data = {
             "generated_at": dt.datetime.now(dt.UTC).isoformat(),
             "domain": DOMAIN,
-            "schema_version": 2,
+            "schema_version": 3,
             "entries": {},
         }
 
@@ -314,10 +357,13 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
                         "manual_control_time": getattr(manager, "manual_control_time", {}),
                         "cover_status": getattr(manager, "cover_status", {}),
                         "last_skip_reason": getattr(manager, "last_skip_reason", {}),
+                        "status_reason": getattr(manager, "status_reason", {}),
                         "last_service_call": getattr(manager, "last_service_call", {}),
+                        "last_service_error": getattr(manager, "last_service_error", {}),
                         "movement_history": getattr(manager, "movement_history", {}),
                         "manual_controlled": getattr(manager, "manual_controlled", []),
                     },
+                    "behavioral_learning": coordinator.learner.diagnostics(),
                 }
             else:
                 runtime = {"coordinator_loaded": False}
@@ -387,12 +433,24 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 
     return True
 
-async def async_initialize_integration(
-    hass: HomeAssistant,
-    config_entry: ConfigEntry | None = None,
-) -> bool:
-    """Initialize the integration."""
+async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Migrate legacy entries to complete, validated option schema version 2."""
+    if entry.version > 2:
+        _LOGGER.error("Unsupported Adaptive Cover config version: %s", entry.version)
+        return False
 
+    options = _normalize_options(entry.options)
+    errors = validate_options(options)
+    if errors:
+        _LOGGER.error("Cannot migrate %s: %s", entry.title, errors)
+        return False
+
+    if entry.version < 2 or dict(entry.options) != options:
+        hass.config_entries.async_update_entry(
+            entry,
+            options=options,
+            version=2,
+        )
     return True
 
 
@@ -401,20 +459,36 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     hass.data.setdefault(DOMAIN, {})
 
+    options = _normalize_options(entry.options)
+    selected_covers = set(options.get(CONF_ENTITIES, []))
+    for other_entry in hass.config_entries.async_entries(DOMAIN):
+        if other_entry.entry_id == entry.entry_id:
+            continue
+        overlap = selected_covers.intersection(
+            _normalize_options(other_entry.options).get(CONF_ENTITIES, [])
+        )
+        if overlap:
+            _LOGGER.error(
+                "Cannot load %s because covers are assigned more than once: %s",
+                entry.title,
+                sorted(overlap),
+            )
+            return False
+
     coordinator = AdaptiveDataUpdateCoordinator(hass, entry)
-    _temp_entity = entry.options.get(CONF_TEMP_ENTITY)
-    _presence_entity = entry.options.get(CONF_PRESENCE_ENTITY)
-    _weather_entity = entry.options.get(CONF_WEATHER_ENTITY)
-    _cover_entities = entry.options.get(CONF_ENTITIES, [])
-    _end_time_entity = entry.options.get(CONF_END_ENTITY)
-    _window_entity = entry.options.get(CONF_WINDOW_ENTITY)
-    _rain_entity = entry.options.get(CONF_RAIN_ENTITY)
-    _wind_entity = entry.options.get(CONF_WIND_ENTITY)
-    _outside_temp_entity = entry.options.get(CONF_OUTSIDETEMP_ENTITY)
-    _lux_entity = entry.options.get(CONF_LUX_ENTITY)
-    _irradiance_entity = entry.options.get(CONF_IRRADIANCE_ENTITY)
-    _workday_entity = entry.options.get(CONF_WORKDAY_ENTITY)
-    _start_time_entity = entry.options.get(CONF_START_ENTITY)
+    _temp_entity = options.get(CONF_TEMP_ENTITY)
+    _presence_entity = options.get(CONF_PRESENCE_ENTITY)
+    _weather_entity = options.get(CONF_WEATHER_ENTITY)
+    _cover_entities = options.get(CONF_ENTITIES, [])
+    _end_time_entity = options.get(CONF_END_ENTITY)
+    _window_entity = options.get(CONF_WINDOW_ENTITY)
+    _rain_entity = options.get(CONF_RAIN_ENTITY)
+    _wind_entity = options.get(CONF_WIND_ENTITY)
+    _outside_temp_entity = options.get(CONF_OUTSIDETEMP_ENTITY)
+    _lux_entity = options.get(CONF_LUX_ENTITY)
+    _irradiance_entity = options.get(CONF_IRRADIANCE_ENTITY)
+    _workday_entity = options.get(CONF_WORKDAY_ENTITY)
+    _start_time_entity = options.get(CONF_START_ENTITY)
 
     _entities = ["sun.sun"]
 

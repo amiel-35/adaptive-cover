@@ -149,6 +149,14 @@ This mode uses the calculated position when the sun is within the specified azim
 This mode calculates the position based on extra parameters for presence, indoor temperature, minimal comfort temperature, maximum comfort temperature and weather (optional).
 This mode is split up in two types of strategies; [Presence](https://github.com/basbruss/adaptive-cover?tab=readme-ov-file#presence) and [No Presence](https://github.com/basbruss/adaptive-cover?tab=readme-ov-file#no-presence).
 
+Post-sun thermal protection is tracked per configured cover. It is available only after direct sun has actually reached that window, expires after the configured hold duration, and is released early when outdoor air is cooler than the room by the configured temperature delta. Global irradiance no longer activates thermal hold for windows that have not been exposed to direct sun.
+
+Night purge uses a hard local interval from sunset until the configured end time. At the deadline the integration recalculates the current safe target instead of unconditionally forcing every cover to `0%`.
+
+### Behavioral learning
+
+Manual changes gradually teach a bounded position bias and comfort-temperature offset for each cover. Learned values are persisted in Home Assistant storage and survive restarts. Safety decisions such as rain, wind, dawn protection and strict sun block are never modified by learning. Use the `Reset Behavioral Learning` button to remove all learned offsets for a config entry.
+
 #### Climate strategies
 
 - **No Presence**:
@@ -241,6 +249,9 @@ This mode is split up in two types of strategies; [Presence](https://github.com/
 | Lux Threshold                 | `1000`  |       |                                               | "In non-summer, above threshold, use optimal position. Otherwise, default position or fully open in winter."                                         |
 | Irradiance Entity             | `None`  |       | `sensor.irradiance`                           | Returns measured irradiance                                                                                                                          |
 | Irradiance Threshold          | `300`   |       |                                               | "In non-summer, above threshold, use optimal position. Otherwise, default position or fully open in winter."                                         |
+| Thermal Hold Duration         | `120`   | 0-720 |                                               | Maximum number of minutes to retain protection after direct sun leaves this specific window.                                                         |
+| Thermal Hold Release Delta    | `1.0`   | 0-10  |                                               | Release protection when outdoor air is cooler than the room by at least this value.                                                                  |
+| Night Purge End Time          | `07:00` |       |                                               | Hard local deadline after which the current safe target is recalculated and applied.                                                                  |
 
 ### Blindspot
 

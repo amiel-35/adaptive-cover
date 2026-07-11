@@ -2,6 +2,33 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased] - 2026-07-11
+
+### Dodane
+- [Dodane] Ukończono trwały `BehavioralLearner`: zapisuje per roleta ograniczone korekty pozycji i temperatury komfortu, odtwarza je po restarcie oraz udostępnia przycisk resetu uczenia.
+- [Dodane] Dodano konfigurowalny czas `thermal_hold_duration` i różnicę temperatur `thermal_hold_release_delta` zwalniającą ochronę termiczną.
+- [Dodane] Dodano czysty moduł decyzji oraz testy jednostkowe dla nocnego wietrzenia, ochrony termicznej i walidacji ustawień.
+- [Dodane] Dodano typowany `DecisionResult` z kodem, priorytetem, uzasadnieniem i wejściami decyzji udostępnianymi w diagnostyce.
+- [Dodane] Dodano workflow CI uruchamiający Ruff i testy jednostkowe.
+
+### Zmienione
+- [Zmienione] Wszystkie opóźnione retry otrzymują numer generacji, ponownie sprawdzają aktualny cel, automatykę, okno, manual override i limity ruchu oraz są anulowane przy przeładowaniu integracji.
+- [Zmienione] Eksport ustawień używa schematu 3, a import pozostaje zgodny ze starszym formatem i odrzuca cały plik przed zmianami, gdy wykryje niespójne opcje.
+- [Zmienione] Starsze wpisy `ConfigEntry` są jawnie migrowane do wersji 2 z kompletem znormalizowanych i zwalidowanych opcji.
+- [Zmienione] Diagnostyka HA i eksport JSON pokazują trwałe uczenie, cel per roleta, stres termiczny, ostatnie bezpośrednie słońce, bieżący powód statusu i błędy usług.
+- [Zmienione] Prognoza pogody jest buforowana przez godzinę, a obliczenia pozycji słońca nie tworzą wielokrotnie tych samych zakresów czasu.
+- [Zmienione] Blueprint integracji oznaczono jako legacy dla dodatkowych rolet i usunięto dublowanie encji sterowanych bezpośrednio przez integrację.
+
+### Naprawione
+- [Naprawione] `thermal_hold` działa wyłącznie po rzeczywistym bezpośrednim nasłonecznieniu danego okna i zwalnia osłonę, gdy chłodniejsze powietrze zapewnia wystarczające chłodzenie.
+- [Naprawione] Globalne promieniowanie nie wymusza już ochrony termicznej w pokojach, których okna pozostają w cieniu.
+- [Naprawione] Godzina końca nocnego wietrzenia jest twardą granicą także przed wschodem słońca i uruchamia świeżą decyzję zamiast bezwarunkowego zamknięcia.
+- [Naprawione] Włączenie automatyki respektuje politykę otwartego okna, harmonogram, cooldown, limity ruchu i ręczne przejęcie sterowania.
+- [Naprawione] Zabezpieczono obliczenia markiz i lameli przed dzieleniem przez zero, `NaN` i wartościami spoza zakresu `0-100%`.
+- [Naprawione] Obsłużono brak pozycji i niepełne zdarzenia rolet bez błędnego rozpoznawania manual override.
+- [Naprawione] Prędkość wiatru jest normalizowana z `m/s`, `mph` i węzłów do `km/h` przed porównaniem z progiem bezpieczeństwa.
+- [Naprawione] Status metody sterowania wraca do `intermediate`, a sensor harmonogramu pokazuje stan rzeczywisty zamiast stałego `Aktywny`.
+
 ## [Unreleased] - 2026-06-27
 
 ### Naprawione

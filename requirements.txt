@@ -1,4 +1,4 @@
-homeassistant~=2024.5
+homeassistant==2023.11.1
 pip>=24.1.1,<24.3
 numpy
 pandas~=2.2

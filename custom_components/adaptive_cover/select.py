@@ -1,5 +1,4 @@
 """Select platform for Adaptive Cover."""
-import datetime as dt
 from homeassistant.components.select import SelectEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -79,18 +78,8 @@ class AdaptiveCoverOverrideSelect(CoordinatorEntity, SelectEntity):
             "sunset": 9999
         }
         minutes = mapping.get(option, 60)
-        duration_minutes = minutes
-        if option == "sunset":
-            end_time = self.coordinator._end_time
-            if end_time is not None:
-                now = dt.datetime.now(dt.UTC)
-                end_utc = end_time if end_time.tzinfo else end_time.replace(tzinfo=dt.UTC)
-                duration_minutes = max(0, int((end_utc - now).total_seconds() / 60))
-
         new_options = dict(self.config_entry.options)
         new_options["manual_override_duration"] = {"minutes": minutes}
 
         self.hass.config_entries.async_update_entry(self.config_entry, options=new_options)
-        self.coordinator.manager.reset_duration = dt.timedelta(minutes=duration_minutes)
         self.async_write_ha_state()
-        await self.coordinator.async_refresh()

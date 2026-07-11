@@ -1,10 +1,11 @@
 """Fetch sun data."""
 
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
 
 import pandas as pd
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.sun import get_astral_location
+from homeassistant.util import dt as dt_util
 
 
 class SunData:
@@ -20,7 +21,7 @@ class SunData:
     @property
     def times(self) -> pd.DatetimeIndex:
         """Define time interval."""
-        start_date = date.today()
+        start_date = dt_util.now().date()
         end_date = start_date + timedelta(days=1)
 
         times = pd.date_range(
@@ -31,34 +32,26 @@ class SunData:
     @property
     def solar_azimuth(self) -> list:
         """Create list with solar azimuth data per 5 minutes."""
-        index = 0
-        azi_list = []
-        for _i in self.times:
-            azi_list.append(
-                self.location.solar_azimuth(self.times[index], self.elevation)
-            )
-            index += 1
-        return azi_list
+        return [
+            self.location.solar_azimuth(moment, self.elevation)
+            for moment in self.times
+        ]
 
     @property
     def solar_elevation(self) -> list:
         """Create list with solar elevation data per 5 minutes."""
-        index = 0
-        ele_list = []
-        for _i in self.times:
-            ele_list.append(
-                self.location.solar_elevation(self.times[index], self.elevation)
-            )
-            index += 1
-        return ele_list
+        return [
+            self.location.solar_elevation(moment, self.elevation)
+            for moment in self.times
+        ]
 
     def sunset(self) -> datetime:
         """Fetch sunset time."""
-        return self.location.sunset(date.today(), local=False)
+        return self.location.sunset(dt_util.now().date(), local=False)
 
     def sunrise(self) -> datetime:
         """Fetch sunrise time."""
-        return self.location.sunrise(date.today(), local=False)
+        return self.location.sunrise(dt_util.now().date(), local=False)
 
     # def df_today(self)-> pd.DataFrame:
     #     """Create dataframe with azimuth and elevation data"""

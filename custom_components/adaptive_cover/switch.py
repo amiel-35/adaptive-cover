@@ -182,8 +182,10 @@ class AdaptiveCoverSwitch(
                     not self.coordinator.manager.is_cover_manual(entity)
                     and self.coordinator.adaptive_movement_allowed
                 ):
-                    await self.coordinator.async_set_position(
-                        entity, self.coordinator.state
+                    await self.coordinator.async_handle_call_service(
+                        entity,
+                        self.coordinator.state,
+                        self.coordinator._active_options,
                     )
         await self.coordinator.async_refresh()
         self.schedule_update_ha_state()

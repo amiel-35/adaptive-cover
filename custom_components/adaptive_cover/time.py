@@ -61,4 +61,3 @@ class AdaptiveCoverTimeEntity(CoordinatorEntity, TimeEntity):
         new_options[self._key] = value.isoformat()
         self.hass.config_entries.async_update_entry(self.config_entry, options=new_options)
         self.async_write_ha_state()
-        await self.coordinator.async_refresh()

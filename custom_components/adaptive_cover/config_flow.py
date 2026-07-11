@@ -93,9 +93,12 @@ from .const import (
     CONF_WIND_THRESHOLD,
     CONF_PURGE_POS,
     CONF_THERMAL_HOLD_AFTER_SUN,
+    CONF_THERMAL_HOLD_DURATION,
     CONF_THERMAL_HOLD_POSITION,
+    CONF_THERMAL_HOLD_RELEASE_DELTA,
     DOMAIN,
     SensorType,
+    STRATEGY_MODE_BASIC,
     CONF_MIN_POSITION,
     CONF_ENABLE_MAX_POSITION,
     CONF_ENABLE_MIN_POSITION,
@@ -108,6 +111,8 @@ from .const import (
     CONF_WINDOW_OPEN_POSITION,
     WINDOW_ACTION_PAUSE,
     WINDOW_OPEN_ACTIONS,
+    normalize_options,
+    validate_options,
 )
 
 # DEFAULT_NAME = "Adaptive Cover"
@@ -118,7 +123,7 @@ SENSOR_TYPE_MENU = [SensorType.BLIND, SensorType.AWNING, SensorType.TILT]
 CONFIG_SCHEMA = vol.Schema(
     {
         vol.Required("name"): selector.TextSelector(),
-        vol.Optional(CONF_MODE): selector.SelectSelector(
+        vol.Required(CONF_SENSOR_TYPE, default=SensorType.BLIND): selector.SelectSelector(
             selector.SelectSelectorConfig(
                 options=SENSOR_TYPE_MENU, translation_key="mode"
             )
@@ -367,6 +372,16 @@ CLIMATE_OPTIONS = vol.Schema(
                 min=0, max=100, step=1, mode="slider", unit_of_measurement="%"
             )
         ),
+        vol.Optional(CONF_THERMAL_HOLD_DURATION, default=120): selector.NumberSelector(
+            selector.NumberSelectorConfig(
+                min=0, max=720, step=15, mode="box", unit_of_measurement="min"
+            )
+        ),
+        vol.Optional(CONF_THERMAL_HOLD_RELEASE_DELTA, default=1.0): selector.NumberSelector(
+            selector.NumberSelectorConfig(
+                min=0, max=10, step=0.5, mode="box", unit_of_measurement="°C"
+            )
+        ),
     }
 )
 
@@ -492,14 +507,26 @@ def _get_azimuth_edges(data) -> tuple[int, int]:
     return data[CONF_FOV_LEFT] + data[CONF_FOV_RIGHT]
 
 
+def _conflicting_covers(hass, covers: list[str], excluded_entry_id: str | None = None) -> set[str]:
+    """Return covers already owned by another Adaptive Cover entry."""
+    selected = set(covers or [])
+    conflicts: set[str] = set()
+    for entry in hass.config_entries.async_entries(DOMAIN):
+        if entry.entry_id == excluded_entry_id:
+            continue
+        conflicts.update(selected.intersection(entry.options.get(CONF_ENTITIES, [])))
+    return conflicts
+
+
 class ConfigFlowHandler(ConfigFlow, domain=DOMAIN):
     """Handle ConfigFlow."""
+
+    VERSION = 2
 
     def __init__(self) -> None:  # noqa: D107
         super().__init__()
         self.type_blind: str | None = None
         self.config: dict[str, Any] = {}
-        self.mode: str = "basic"
 
     @staticmethod
     @callback
@@ -512,11 +539,11 @@ class ConfigFlowHandler(ConfigFlow, domain=DOMAIN):
         # errors = {}
         if user_input:
             self.config = user_input
-            if self.config[CONF_MODE] == SensorType.BLIND:
+            if self.config[CONF_SENSOR_TYPE] == SensorType.BLIND:
                 return await self.async_step_vertical()
-            if self.config[CONF_MODE] == SensorType.AWNING:
+            if self.config[CONF_SENSOR_TYPE] == SensorType.AWNING:
                 return await self.async_step_horizontal()
-            if self.config[CONF_MODE] == SensorType.TILT:
+            if self.config[CONF_SENSOR_TYPE] == SensorType.TILT:
                 return await self.async_step_tilt()
         return self.async_show_form(step_id="user", data_schema=CONFIG_SCHEMA)
 
@@ -533,7 +560,7 @@ class ConfigFlowHandler(ConfigFlow, domain=DOMAIN):
                         step_id="vertical",
                         data_schema=CLIMATE_MODE.extend(VERTICAL_OPTIONS.schema),
                         errors={
-                            CONF_MAX_ELEVATION: "Must be greater than 'Minimal Elevation'"
+                            CONF_MAX_ELEVATION: "max_elevation_must_exceed_min"
                         },
                     )
             self.config.update(user_input)
@@ -560,7 +587,7 @@ class ConfigFlowHandler(ConfigFlow, domain=DOMAIN):
                         step_id="horizontal",
                         data_schema=CLIMATE_MODE.extend(HORIZONTAL_OPTIONS.schema),
                         errors={
-                            CONF_MAX_ELEVATION: "Must be greater than 'Minimal Elevation'"
+                            CONF_MAX_ELEVATION: "max_elevation_must_exceed_min"
                         },
                     )
             self.config.update(user_input)
@@ -587,7 +614,7 @@ class ConfigFlowHandler(ConfigFlow, domain=DOMAIN):
                         step_id="tilt",
                         data_schema=CLIMATE_MODE.extend(TILT_OPTIONS.schema),
                         errors={
-                            CONF_MAX_ELEVATION: "Must be greater than 'Minimal Elevation'"
+                            CONF_MAX_ELEVATION: "max_elevation_must_exceed_min"
                         },
                     )
             self.config.update(user_input)
@@ -610,7 +637,7 @@ class ConfigFlowHandler(ConfigFlow, domain=DOMAIN):
                     step_id="interp",
                     data_schema=INTERPOLATION_OPTIONS,
                     errors={
-                        CONF_INTERP_LIST_NEW: "Must have same length as 'Interpolation' list"
+                        CONF_INTERP_LIST_NEW: "interpolation_lengths_must_match"
                     },
                 )
             self.config.update(user_input)
@@ -645,7 +672,7 @@ class ConfigFlowHandler(ConfigFlow, domain=DOMAIN):
                     step_id="blind_spot",
                     data_schema=schema,
                     errors={
-                        CONF_BLIND_SPOT_RIGHT: "Must be greater than 'Blind Spot Left Edge'"
+                        CONF_BLIND_SPOT_RIGHT: "blind_spot_right_must_exceed_left"
                     },
                 )
             self.config.update(user_input)
@@ -680,6 +707,11 @@ class ConfigFlowHandler(ConfigFlow, domain=DOMAIN):
 
     async def async_step_update(self, user_input: dict[str, Any] | None = None):
         """Create entry."""
+        errors = validate_options(self.config)
+        if errors:
+            return self.async_abort(reason=errors[0])
+        if _conflicting_covers(self.hass, self.config.get(CONF_ENTITIES, [])):
+            return self.async_abort(reason="cover_already_configured")
         type = {
             "cover_blind": "Vertical",
             "cover_awning": "Horizontal",
@@ -692,7 +724,7 @@ class ConfigFlowHandler(ConfigFlow, domain=DOMAIN):
                 CONF_SENSOR_TYPE: self.type_blind,
             },
             options={
-                CONF_MODE: self.mode,
+                CONF_MODE: STRATEGY_MODE_BASIC,
                 CONF_AZIMUTH: self.config.get(CONF_AZIMUTH),
                 CONF_HEIGHT_WIN: self.config.get(CONF_HEIGHT_WIN),
                 CONF_DISTANCE: self.config.get(CONF_DISTANCE),
@@ -781,6 +813,10 @@ class ConfigFlowHandler(ConfigFlow, domain=DOMAIN):
                 CONF_PURGE_POS: self.config.get(CONF_PURGE_POS, 15),
                 CONF_THERMAL_HOLD_AFTER_SUN: self.config.get(CONF_THERMAL_HOLD_AFTER_SUN, False),
                 CONF_THERMAL_HOLD_POSITION: self.config.get(CONF_THERMAL_HOLD_POSITION, 30),
+                CONF_THERMAL_HOLD_DURATION: self.config.get(CONF_THERMAL_HOLD_DURATION, 120),
+                CONF_THERMAL_HOLD_RELEASE_DELTA: self.config.get(
+                    CONF_THERMAL_HOLD_RELEASE_DELTA, 1.0
+                ),
                 CONF_RAIN_NIGHT_ONLY: self.config.get(CONF_RAIN_NIGHT_ONLY, False),
                 CONF_WINDOW_ENTITY: self.config.get(CONF_WINDOW_ENTITY),
                 CONF_WINDOW_OPEN_ACTION: self.config.get(CONF_WINDOW_OPEN_ACTION, WINDOW_ACTION_PAUSE),
@@ -798,8 +834,9 @@ class OptionsFlowHandler(OptionsFlow):
 
     def __init__(self, config_entry: ConfigEntry) -> None:
         """Initialize options flow."""
+        self.config_entry = config_entry
         self.current_config: dict = dict(config_entry.data)
-        self.options = dict(config_entry.options)
+        self.options = normalize_options(config_entry.options)
         self.sensor_type: SensorType = (
             self.current_config.get(CONF_SENSOR_TYPE) or SensorType.BLIND
         )
@@ -863,7 +900,7 @@ class OptionsFlowHandler(OptionsFlow):
                         step_id="vertical",
                         data_schema=CLIMATE_MODE.extend(VERTICAL_OPTIONS.schema),
                         errors={
-                            CONF_MAX_ELEVATION: "Must be greater than 'Minimal Elevation'"
+                            CONF_MAX_ELEVATION: "max_elevation_must_exceed_min"
                         },
                     )
             self.options.update(user_input)
@@ -902,7 +939,7 @@ class OptionsFlowHandler(OptionsFlow):
                         step_id="horizontal",
                         data_schema=CLIMATE_MODE.extend(HORIZONTAL_OPTIONS.schema),
                         errors={
-                            CONF_MAX_ELEVATION: "Must be greater than 'Minimal Elevation'"
+                            CONF_MAX_ELEVATION: "max_elevation_must_exceed_min"
                         },
                     )
             self.options.update(user_input)
@@ -937,7 +974,7 @@ class OptionsFlowHandler(OptionsFlow):
                         step_id="tilt",
                         data_schema=CLIMATE_MODE.extend(TILT_OPTIONS.schema),
                         errors={
-                            CONF_MAX_ELEVATION: "Must be greater than 'Minimal Elevation'"
+                            CONF_MAX_ELEVATION: "max_elevation_must_exceed_min"
                         },
                     )
             self.options.update(user_input)
@@ -961,7 +998,7 @@ class OptionsFlowHandler(OptionsFlow):
                     step_id="interp",
                     data_schema=INTERPOLATION_OPTIONS,
                     errors={
-                        CONF_INTERP_LIST_NEW: "Must have same length as 'Interpolation' list"
+                        CONF_INTERP_LIST_NEW: "interpolation_lengths_must_match"
                     },
                 )
             self.options.update(user_input)
@@ -999,7 +1036,7 @@ class OptionsFlowHandler(OptionsFlow):
                     step_id="blind_spot",
                     data_schema=schema,
                     errors={
-                        CONF_BLIND_SPOT_RIGHT: "Must be greater than 'Blind Spot Left Edge'"
+                        CONF_BLIND_SPOT_RIGHT: "blind_spot_right_must_exceed_left"
                     },
                 )
             self.options.update(user_input)
@@ -1049,6 +1086,15 @@ class OptionsFlowHandler(OptionsFlow):
 
     async def _update_options(self) -> FlowResult:
         """Update config entry options."""
+        errors = validate_options(self.options)
+        if errors:
+            return self.async_abort(reason=errors[0])
+        if _conflicting_covers(
+            self.hass,
+            self.options.get(CONF_ENTITIES, []),
+            self.config_entry.entry_id,
+        ):
+            return self.async_abort(reason="cover_already_configured")
         return self.async_create_entry(title="", data=self.options)
 
     def optional_entities(self, keys: list, user_input: dict[str, Any] | None = None):

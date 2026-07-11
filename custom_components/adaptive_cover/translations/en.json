@@ -1,12 +1,28 @@
 {
   "title": "Adaptive Cover",
   "config": {
+    "abort": {
+      "cover_already_configured": "One of the selected covers is already controlled by another Adaptive Cover entry.",
+      "temp_low_must_be_lower_than_temp_high": "The lower comfort temperature must be below the upper temperature.",
+      "lux_off_must_not_exceed_on": "The Lux OFF threshold must not exceed the ON threshold.",
+      "irradiance_off_must_not_exceed_on": "The irradiance OFF threshold must not exceed the ON threshold.",
+      "min_position_must_not_exceed_max_position": "The minimum position must not exceed the maximum position.",
+      "interpolation_lists_must_have_equal_length": "Interpolation lists must have equal length.",
+      "interpolation_source_must_be_sorted": "The interpolation source list must be sorted.",
+      "interpolation_values_must_be_integers": "Interpolation values must be integers."
+    },
+    "error": {
+      "max_elevation_must_exceed_min": "Maximum elevation must be greater than minimum elevation.",
+      "interpolation_lengths_must_match": "Interpolation lists must have equal length.",
+      "blind_spot_right_must_exceed_left": "The right blind-spot edge must be greater than the left edge."
+    },
     "step": {
       "user": {
         "data": {
           "name": "Name",
           "blueprint": "Add blueprint to HomeAssistant",
-          "mode": "Type of blind"
+          "mode": "Type of blind",
+          "sensor_type": "Type of blind"
         }
       },
       "automation": {
@@ -123,7 +139,9 @@
           "night_purge_enabled": "Enable night purge",
           "night_purge_end_time": "Night purge closing time",
           "thermal_hold_after_sun": "Keep thermal protection after sun leaves the window",
-          "thermal_hold_position": "Post-sun thermal protection position (%)"
+          "thermal_hold_position": "Post-sun thermal protection position (%)",
+          "thermal_hold_duration": "Maximum thermal protection hold time (min)",
+          "thermal_hold_release_delta": "Cooling temperature advantage that releases protection (°C)"
         },
         "data_description": {
           "presence_entity": "Entity representing room or home presence status",
@@ -147,7 +165,9 @@
           "night_purge_enabled": "Allows the cover to slightly open after sunset when outside is cooler than the room.",
           "night_purge_end_time": "Time at which covers are closed after night purge.",
           "thermal_hold_after_sun": "Do not immediately return to the default position if the room is still overheated.",
-          "thermal_hold_position": "Position used while holding thermal protection after direct sun leaves the window."
+          "thermal_hold_position": "Position used while holding thermal protection after direct sun leaves the window.",
+          "thermal_hold_duration": "Maximum time to retain protection after direct sun leaves this window.",
+          "thermal_hold_release_delta": "Release protection when outdoor temperature is lower than indoor temperature by at least this value."
         },
         "description": "Add additional climate configuration variables.",
         "title": "Climate settings"
@@ -409,7 +429,9 @@
           "night_purge_enabled": "Enable night purge",
           "night_purge_end_time": "Night purge closing time",
           "thermal_hold_after_sun": "Keep thermal protection after sun leaves the window",
-          "thermal_hold_position": "Post-sun thermal protection position (%)"
+          "thermal_hold_position": "Post-sun thermal protection position (%)",
+          "thermal_hold_duration": "Maximum thermal protection hold time (min)",
+          "thermal_hold_release_delta": "Cooling temperature advantage that releases protection (°C)"
         },
         "data_description": {
           "presence_entity": "Entity representing room or home presence status",
@@ -433,7 +455,9 @@
           "night_purge_enabled": "Allows the cover to slightly open after sunset when outside is cooler than the room.",
           "night_purge_end_time": "Time at which covers are closed after night purge.",
           "thermal_hold_after_sun": "Do not immediately return to the default position if the room is still overheated.",
-          "thermal_hold_position": "Position used while holding thermal protection after direct sun leaves the window."
+          "thermal_hold_position": "Position used while holding thermal protection after direct sun leaves the window.",
+          "thermal_hold_duration": "Maximum time to retain protection after direct sun leaves this window.",
+          "thermal_hold_release_delta": "Release protection when outdoor temperature is lower than indoor temperature by at least this value."
         },
         "description": "Add additional climate configuration variables.",
         "title": "Climate settings"
@@ -660,7 +684,12 @@
         "name": "State Reason"
       },
       "schedule": {
-        "name": "Schedule"
+        "name": "Schedule",
+        "state": {
+          "active": "Active",
+          "disabled": "Automation disabled",
+          "outside_schedule": "Outside schedule"
+        }
       }
     },
     "switch": {
@@ -692,6 +721,9 @@
     "button": {
       "reset_manual": {
         "name": "Reset Manual Override"
+      },
+      "reset_learning": {
+        "name": "Reset Behavioral Learning"
       }
     }
   },

@@ -1,12 +1,28 @@
 {
   "title": "Adaptacyjne Rolety (Adaptive Cover)",
   "config": {
+    "abort": {
+      "cover_already_configured": "Jedna z wybranych rolet jest już sterowana przez inny wpis Adaptive Cover.",
+      "temp_low_must_be_lower_than_temp_high": "Dolna temperatura komfortu musi być niższa od górnej.",
+      "lux_off_must_not_exceed_on": "Próg Lux OFF nie może być wyższy od progu ON.",
+      "irradiance_off_must_not_exceed_on": "Próg promieniowania OFF nie może być wyższy od progu ON.",
+      "min_position_must_not_exceed_max_position": "Pozycja minimalna nie może być wyższa od maksymalnej.",
+      "interpolation_lists_must_have_equal_length": "Listy interpolacji muszą mieć tę samą długość.",
+      "interpolation_source_must_be_sorted": "Źródłowa lista interpolacji musi być posortowana.",
+      "interpolation_values_must_be_integers": "Wartości interpolacji muszą być liczbami całkowitymi."
+    },
+    "error": {
+      "max_elevation_must_exceed_min": "Maksymalna elewacja musi być większa od minimalnej.",
+      "interpolation_lengths_must_match": "Listy interpolacji muszą mieć tę samą długość.",
+      "blind_spot_right_must_exceed_left": "Prawa krawędź martwej strefy musi być większa od lewej."
+    },
     "step": {
       "user": {
         "data": {
           "name": "Nazwa",
           "blueprint": "Dodaj blueprint do HomeAssistant",
-          "mode": "Typ rolety/osłony"
+          "mode": "Typ rolety/osłony",
+          "sensor_type": "Typ rolety/osłony"
         }
       },
       "automation": {
@@ -122,7 +138,9 @@
           "night_purge_enabled": "Włącz nocne wietrzenie",
           "night_purge_end_time": "Godzina zakończenia nocnego wietrzenia",
           "thermal_hold_after_sun": "Utrzymuj ochronę termiczną po wyjściu słońca z okna",
-          "thermal_hold_position": "Pozycja ochrony termicznej po słońcu (%)"
+          "thermal_hold_position": "Pozycja ochrony termicznej po słońcu (%)",
+          "thermal_hold_duration": "Maksymalny czas utrzymania ochrony termicznej (min)",
+          "thermal_hold_release_delta": "Przewaga chłodzenia zwalniająca ochronę (°C)"
         },
         "data_description": {
           "presence_entity": "Encja reprezentująca obecność domowników (np. group.family)",
@@ -146,7 +164,9 @@
           "night_purge_enabled": "Pozwala automatycznie lekko uchylić roletę po zachodzie, gdy na zewnątrz jest chłodniej niż w pokoju.",
           "night_purge_end_time": "Godzina, o której rolety zostaną zamknięte po nocnym wietrzeniu.",
           "thermal_hold_after_sun": "Nie otwieraj rolety od razu na pozycję domyślną, jeśli pokój nadal jest przegrzany.",
-          "thermal_hold_position": "Pozycja używana w trybie utrzymania ochrony termicznej po wyjściu słońca z okna."
+          "thermal_hold_position": "Pozycja używana w trybie utrzymania ochrony termicznej po wyjściu słońca z okna.",
+          "thermal_hold_duration": "Maksymalny czas utrzymania ochrony po wcześniejszym bezpośrednim nasłonecznieniu tego okna.",
+          "thermal_hold_release_delta": "Zwolnij ochronę, gdy na zewnątrz jest chłodniej od temperatury wewnętrznej co najmniej o tę wartość."
         },
         "description": "Skonfiguruj dodatkowe zmienne dla trybu kontroli klimatu.",
         "title": "Ustawienia Klimatyczne"
@@ -408,7 +428,9 @@
           "night_purge_enabled": "Włącz nocne wietrzenie",
           "night_purge_end_time": "Godzina zakończenia nocnego wietrzenia",
           "thermal_hold_after_sun": "Utrzymuj ochronę termiczną po wyjściu słońca z okna",
-          "thermal_hold_position": "Pozycja ochrony termicznej po słońcu (%)"
+          "thermal_hold_position": "Pozycja ochrony termicznej po słońcu (%)",
+          "thermal_hold_duration": "Maksymalny czas utrzymania ochrony termicznej (min)",
+          "thermal_hold_release_delta": "Przewaga chłodzenia zwalniająca ochronę (°C)"
         },
         "data_description": {
           "presence_entity": "Jeżeli czujnik nie wykaże nikogo w domu - integracja wymusi maksymalną energooszczędność",
@@ -433,7 +455,9 @@
           "night_purge_enabled": "Pozwala automatycznie lekko uchylić roletę po zachodzie, gdy na zewnątrz jest chłodniej niż w pokoju.",
           "night_purge_end_time": "Godzina, o której rolety zostaną zamknięte po nocnym wietrzeniu.",
           "thermal_hold_after_sun": "Nie otwieraj rolety od razu na pozycję domyślną, jeśli pokój nadal jest przegrzany.",
-          "thermal_hold_position": "Pozycja używana w trybie utrzymania ochrony termicznej po wyjściu słońca z okna."
+          "thermal_hold_position": "Pozycja używana w trybie utrzymania ochrony termicznej po wyjściu słońca z okna.",
+          "thermal_hold_duration": "Maksymalny czas utrzymania ochrony po wcześniejszym bezpośrednim nasłonecznieniu tego okna.",
+          "thermal_hold_release_delta": "Zwolnij ochronę, gdy na zewnątrz jest chłodniej od temperatury wewnętrznej co najmniej o tę wartość."
         },
         "description": "Skonfiguruj dodatkowe warunki, które sterują termiką Twojego domu.",
         "title": "Ustawienia Klimatyczne"
@@ -660,7 +684,12 @@
         "name": "Powód Decyzji"
       },
       "schedule": {
-        "name": "Harmonogram"
+        "name": "Harmonogram",
+        "state": {
+          "active": "Aktywny",
+          "disabled": "Automatyka wyłączona",
+          "outside_schedule": "Poza harmonogramem"
+        }
       }
     },
     "switch": {
@@ -692,6 +721,9 @@
     "button": {
       "reset_manual": {
         "name": "Reset blokady ręcznej"
+      },
+      "reset_learning": {
+        "name": "Reset uczenia zachowania"
       }
     }
   },

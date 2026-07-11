@@ -3,15 +3,21 @@
 from abc import ABC, abstractmethod
 import contextlib
 from dataclasses import dataclass, field
-from datetime import datetime, time, timedelta
+from datetime import UTC, datetime, time, timedelta
 
 import numpy as np
 import pandas as pd
 from homeassistant.core import HomeAssistant
+from homeassistant.util import dt as dt_util
 from numpy import cos, sin, tan
 from numpy import radians as rad
 
 from .helpers import get_domain, get_safe_state
+from .decision import (
+    is_night_purge_window_active,
+    should_hold_thermal_protection,
+    wind_speed_to_kmh,
+)
 from .sun import SunData
 from .config_context_adapter import ConfigContextAdapter
 
@@ -57,7 +63,7 @@ class EdgeCaseHandler:
     def check_and_handle(sol_elev: float, gamma: float, distance: float, h_win: float) -> tuple[bool, float]:
         """Return whether an edge case applies and its computed position."""
         if sol_elev < EDGE_CASE_LOW_ELEVATION:
-            return (True, h_win)
+            return (True, 0.0)
         if abs(gamma) > EDGE_CASE_EXTREME_GAMMA:
             return (True, h_win)
         if sol_elev > EDGE_CASE_HIGH_ELEVATION:
@@ -208,10 +214,11 @@ class AdaptiveGeneralCover(ABC):
     @property
     def sunset_valid(self) -> bool:
         """Determine if it is after sunset plus offset."""
-        sunset = self.sun_data.sunset().replace(tzinfo=None)
-        sunrise = self.sun_data.sunrise().replace(tzinfo=None)
-        after_sunset = datetime.utcnow() > (sunset + timedelta(minutes=self.sunset_off))
-        before_sunrise = datetime.utcnow() < (
+        sunset = self.sun_data.sunset()
+        sunrise = self.sun_data.sunrise()
+        now_utc = dt_util.utcnow()
+        after_sunset = now_utc > (sunset + timedelta(minutes=self.sunset_off))
+        before_sunrise = now_utc < (
             sunrise + timedelta(minutes=self.sunrise_off)
         )
         self.logger.debug(
@@ -286,6 +293,11 @@ class NormalCoverState:
             self.cover.logger.debug("No sun in window: using default value (%s)", state)
 
         result = np.clip(state, 0, 100)
+        if not np.isfinite(result):
+            self.cover.logger.warning(
+                "Non-finite cover result detected; using the configured default"
+            )
+            result = np.clip(self.cover.default, 0, 100)
 
         # Ochrona przed zaokrąglaniem w dół do 0 gdy słońce w oknie
         if dsv:
@@ -342,6 +354,10 @@ class ClimateCoverData:
     forecast_temperature: float | None = None
     thermal_hold_after_sun: bool = False
     thermal_hold_position: int = 30
+    thermal_hold_duration: int = 120
+    thermal_hold_release_delta: float = 1.0
+    direct_sun_valid: bool = False
+    last_direct_sun_at: datetime | None = None
     night_purge_enabled: bool = True
     night_purge_end_time: str = "07:00:00"
 
@@ -393,14 +409,18 @@ class ClimateCoverData:
         if self.wind_entity:
             val = get_safe_state(self.hass, self.wind_entity)
             with contextlib.suppress(ValueError, TypeError):
-                return float(val)
+                unit = state_attr(
+                    self.hass, self.wind_entity, "unit_of_measurement"
+                )
+                return wind_speed_to_kmh(float(val), unit)
 
         # Fallback do atrybutu weather_entity
         if self.weather_entity:
-            return _as_float(
-                state_attr(self.hass, self.weather_entity, "wind_speed"),
-                0.0,
+            value = _as_float(
+                state_attr(self.hass, self.weather_entity, "wind_speed"), 0.0
             )
+            unit = state_attr(self.hass, self.weather_entity, "wind_speed_unit")
+            return wind_speed_to_kmh(value, unit)
         return 0.0
 
     @property
@@ -526,7 +546,7 @@ class ClimateCoverData:
 
         # 3. WYSOKIE NASŁONECZNIENIE: W pokoju jest gorąco i słońce mocno grzeje (nawet jeśli na zewnątrz jest chłodno)
         high_radiation = False
-        if already_hot_inside:
+        if already_hot_inside and self.direct_sun_valid:
             if getattr(self, "_use_irradiance", False) and getattr(self, "irradiance_entity", None) and getattr(self, "irradiance_threshold", None) is not None:
                 val = get_safe_state(self.hass, self.irradiance_entity)
                 with contextlib.suppress(ValueError, TypeError):
@@ -576,11 +596,11 @@ class ClimateCoverData:
 
         # Oszacowanie nasłonecznienia
         rad_value = 0.0
-        if getattr(self, "irradiance_entity", None):
+        if self.direct_sun_valid and getattr(self, "irradiance_entity", None):
             val = get_safe_state(self.hass, self.irradiance_entity)
             with contextlib.suppress(ValueError, TypeError):
                 rad_value = float(val)
-        elif getattr(self, "lux_entity", None):
+        elif self.direct_sun_valid and getattr(self, "lux_entity", None):
             val = get_safe_state(self.hass, self.lux_entity)
             with contextlib.suppress(ValueError, TypeError):
                 rad_value = float(val) * 0.0079 # przybliżony przelicznik z lux na W/m2
@@ -614,7 +634,11 @@ class ClimateCoverData:
 
         # Ochrona przed "szklarnią": Jeśli słońce mocno grzeje, ucinamy strefę komfortu,
         # żeby system zaczął zamykać rolety wcześniej, nawet jeśli na zewnątrz jest chłodno.
-        if getattr(self, "_use_irradiance", False) and getattr(self, "irradiance_threshold", None) is not None:
+        if (
+            self.direct_sun_valid
+            and getattr(self, "_use_irradiance", False)
+            and getattr(self, "irradiance_threshold", None) is not None
+        ):
             try:
                 if float(rad_value) > self.irradiance_threshold:
                     start_temp -= 1.0
@@ -846,7 +870,13 @@ class ClimateCoverState(NormalCoverState):
         except (TypeError, ValueError):
             purge_end = time(7, 0)
 
-        purge_period = self.cover.sunset_valid or now.time() < purge_end
+        now_local = dt_util.as_local(now) if now.tzinfo else dt_util.now()
+        sunset_today = dt_util.as_local(self.cover.sun_data.sunset())
+        purge_period = is_night_purge_window_active(
+            now_local,
+            sunset_today,
+            purge_end,
+        )
         inside = self.climate_data.inside_temperature
         outside = self.climate_data.outside_temperature
         comfort = self.climate_data.temp_low
@@ -855,13 +885,40 @@ class ClimateCoverState(NormalCoverState):
 
         return float(inside) > float(comfort) and float(outside) < float(inside)
 
+    def _thermal_hold_active(self, now: datetime) -> bool:
+        """Keep shading only after recent direct sun and without strong cooling potential."""
+        if not self.climate_data.thermal_hold_after_sun:
+            return False
+
+        last_direct_sun_at = self.climate_data.last_direct_sun_at
+        if last_direct_sun_at is not None and last_direct_sun_at.tzinfo is None:
+            last_direct_sun_at = last_direct_sun_at.replace(tzinfo=UTC)
+        now_utc = dt_util.as_utc(now) if now.tzinfo else dt_util.utcnow()
+
+        inside = _as_float(self.climate_data.inside_temperature)
+        outside = _as_float(self.climate_data.outside_temperature)
+        return should_hold_thermal_protection(
+            now=now_utc,
+            last_direct_sun_at=(
+                dt_util.as_utc(last_direct_sun_at)
+                if last_direct_sun_at is not None
+                else None
+            ),
+            duration_minutes=self.climate_data.thermal_hold_duration,
+            direct_sun_valid=self.cover.direct_sun_valid,
+            inside_temperature=inside,
+            outside_temperature=outside,
+            release_delta=self.climate_data.thermal_hold_release_delta,
+            thermal_stress=self.climate_data.thermal_stress,
+        )
+
     def get_state(self) -> int:  # noqa: C901
         """Return state."""
         self.cover.state_info = "auto"
         if not hasattr(self.cover, 'state_reason') or not self.cover.state_reason:
             self.cover.state_reason = "Działanie automatyczne."
 
-        now = datetime.now()
+        now = dt_util.now()
         result = None
 
         # 1. Ochrona pogodowa
@@ -872,8 +929,6 @@ class ClimateCoverState(NormalCoverState):
                 f"Ochrona pogodowa: wykryto deszcz. Pozycja awaryjna {result}%."
             )
             return result
-            self.cover.state_reason = "Ochrona pogodowa: Wykryto deszcz. Całkowite zamknięcie."
-            result = 0
 
         wind_thresh = getattr(self.climate_data, "wind_threshold", 40)
         if result is None and self.climate_data.current_wind_speed > wind_thresh:
@@ -883,8 +938,6 @@ class ClimateCoverState(NormalCoverState):
                 f"Ochrona pogodowa: silny wiatr. Pozycja awaryjna {result}%."
             )
             return result
-            self.cover.state_reason = "Ochrona pogodowa: Silny wiatr. Całkowite zamknięcie."
-            result = 0
 
         # 2. Ochrona przed świtem (Dawn Protection)
         m_start = getattr(self.climate_data, "dawn_start_month", 5)
@@ -893,8 +946,8 @@ class ClimateCoverState(NormalCoverState):
         night_purge_active = self._night_purge_conditions_met(now)
 
         if result is None and m_start <= now.month <= m_end:
-            now_utc = datetime.utcnow()
-            sunrise = self.cover.sun_data.sunrise().replace(tzinfo=None)
+            now_utc = dt_util.utcnow()
+            sunrise = self.cover.sun_data.sunrise()
             time_to_sunrise = (sunrise - now_utc).total_seconds()
             if 0 < time_to_sunrise < (duration * 60) and not night_purge_active:
                 self.cover.state_info = "dawn_protection"
@@ -967,10 +1020,7 @@ class ClimateCoverState(NormalCoverState):
                  self.cover.state_reason = "Tryb nocny: słońce po zachodzie."
             elif not self.cover.valid:
                  self.cover.state_info = "sun_shadow"
-                 if (
-                     self.climate_data.thermal_hold_after_sun
-                     and self.climate_data.thermal_stress > 0.0
-                 ):
+                 if self._thermal_hold_active(now):
                      self.cover.state_info = "thermal_hold"
                      result = int(self.climate_data.thermal_hold_position)
                      self.cover.state_reason = (
@@ -1058,11 +1108,16 @@ class AdaptiveHorizontalCover(AdaptiveVerticalCover):
         c_angle = 180 - awn_angle - a_angle
 
         vertical_position = super().calculate_position()
-        length = ((self.h_win - vertical_position) * sin(rad(a_angle))) / sin(
-            rad(c_angle)
-        )
-        # return np.clip(length, 0, self.awn_length)
-        return length
+        denominator = float(sin(rad(c_angle)))
+        if abs(denominator) < 1e-6:
+            self.logger.warning("Awning geometry denominator is too small")
+            return 0.0
+        length = (
+            (self.h_win - vertical_position) * float(sin(rad(a_angle)))
+        ) / denominator
+        if not np.isfinite(length):
+            return 0.0
+        return float(np.clip(length, 0, self.awn_length))
 
     def calculate_percentage(self) -> float:
         """Convert awn length to percentage or default value."""
@@ -1090,19 +1145,27 @@ class AdaptiveTiltCover(AdaptiveGeneralCover):
         https://www.mdpi.com/1996-1073/13/7/1731
         """
         beta = self.beta
+        if self.depth <= 0:
+            self.logger.error("Slat depth must be greater than zero")
+            return 0.0
 
+        ratio = self.slat_distance / self.depth
+        radicand = (tan(beta) ** 2) - (ratio**2) + 1
+        if radicand < 0:
+            self.logger.warning("Tilt geometry has no real solution; clamping slats")
+            radicand = 0.0
+        denominator = 1 + ratio
+        if abs(denominator) < 1e-6:
+            return 0.0
         slat = 2 * np.arctan(
             (
                 tan(beta)
-                + np.sqrt(
-                    (tan(beta) ** 2) - ((self.slat_distance / self.depth) ** 2) + 1
-                )
+                + np.sqrt(radicand)
             )
-            / (1 + self.slat_distance / self.depth)
+            / denominator
         )
         result = np.rad2deg(slat)
-
-        return result
+        return float(result) if np.isfinite(result) else 0.0
 
     def calculate_percentage(self):
         """Convert tilt angle to percentages or default value."""

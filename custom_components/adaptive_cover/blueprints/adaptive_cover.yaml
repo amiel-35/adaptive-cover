@@ -1,7 +1,7 @@
 blueprint:
-  name: Adaptive Cover
+  name: Adaptive Cover - dodatkowe rolety (legacy)
   description: "`version 0.0.2` \n
-    Set cover position based on direct sunlight exposed to window \n\n
+    Steruje wyłącznie dodatkowymi roletami, które nie są przypisane bezpośrednio do wpisu integracji. \n\n
     Calculations are done internally in the blueprint removing the need to use a sensor to input a value
     \n for in depth information on the calculations and variables, check this forum [post](https://community.home-assistant.io/t/automatic-blinds-sunscreen-control-based-on-sun-platform/573818)
     \n **Code Owner:** [`@langestefan`](https://community.home-assistant.io/u/langestefan/)
@@ -26,6 +26,8 @@ blueprint:
           multiple: true
           filter:
             domain: cover
+            supported_features:
+              - cover.CoverEntityFeature.SET_POSITION
     change_threshold:
       name: Minimun percentage change
       description: The minimum percentage change to current position of the cover(s) to change position (to save battery)
@@ -64,13 +66,11 @@ variables:
   adaptive_cover_entity: !input adaptive_cover_entity
   cover_entity: !input cover_entity
   entities: >
-    {%set list1 = state_attr(adaptive_cover_entity,'entity_id') %}
-    {%set list2 = cover_entity %}
-    {{(list1 + list2) |unique |list}}
+    {{cover_entity | unique | list}}
   change_threshold: !input change_threshold
   time_out: !input time_out
   sensor_state: "{{states(adaptive_cover_entity)}}"
-  default_height: "{{state_attr(adaptive_cover_entity,'default_height')}}"
+  default_height: "{{state_attr(adaptive_cover_entity,'default')}}"
   dict_var: >
     {%- set ns = namespace(con_1=[],con_2=[]) %}
     {%- for entity in entities %}
@@ -114,23 +114,12 @@ action:
                 before: "23:59:00"
           - repeat:
               sequence:
-                - if:
-                    - condition: template
-                      value_template: "{{state_attr(repeat.item,'cover_type')=='cover_tilt'}}"
-                  then:
-                    - service: cover.set_cover_tilt_position
-                      metadata: {}
-                      data:
-                        position: "{{states(adaptive_cover_entity)}}"
-                      target:
-                        entity_id: "{{repeat.item}}"
-                  else:
-                    - service: cover.set_cover_position
-                      metadata: {}
-                      data:
-                        position: "{{states(adaptive_cover_entity)}}"
-                      target:
-                        entity_id: "{{repeat.item}}"
+                - service: cover.set_cover_position
+                  metadata: {}
+                  data:
+                    position: "{{states(adaptive_cover_entity)}}"
+                  target:
+                    entity_id: "{{repeat.item}}"
               for_each: "{{entities}}"
           - choose: []
             default: !input action

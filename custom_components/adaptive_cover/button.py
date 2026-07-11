@@ -28,12 +28,15 @@ async def async_setup_entry(
     reset_manual = AdaptiveCoverButton(
         config_entry, config_entry.entry_id, coordinator
     )
+    reset_learning = AdaptiveCoverLearningResetButton(
+        config_entry, config_entry.entry_id, coordinator
+    )
 
     buttons = []
 
     entities = config_entry.options.get(CONF_ENTITIES, [])
     if len(entities) >= 1:
-        buttons = [reset_manual]
+        buttons = [reset_manual, reset_learning]
 
     async_add_entities(buttons)
 
@@ -78,14 +81,49 @@ class AdaptiveCoverButton(
             if self.coordinator.manager.is_cover_manual(entity):
                 _LOGGER.debug("Resetting manual override for: %s", entity)
                 await self.coordinator.async_set_position(
-                    entity, self.coordinator.state
+                    entity,
+                    self.coordinator._target_for_entity(
+                        entity, self.coordinator.state
+                    ),
                 )
-                while self.coordinator.wait_for_target.get(entity):
-                    await asyncio.sleep(1)
+                try:
+                    async with asyncio.timeout(120):
+                        while self.coordinator.wait_for_target.get(entity):
+                            await asyncio.sleep(1)
+                except TimeoutError:
+                    self.coordinator.logger.warning(
+                        "Timed out while resetting manual override for %s", entity
+                    )
+                    continue
                 self.coordinator.manager.reset(entity)
             else:
                 _LOGGER.debug(
                     "Resetting manual override for %s is not needed since it is already auto-controlled",
                     entity,
                 )
+        await self.coordinator.async_refresh()
+
+
+class AdaptiveCoverLearningResetButton(
+    CoordinatorEntity[AdaptiveDataUpdateCoordinator], ButtonEntity
+):
+    """Reset persistent behavioral learning for this config entry."""
+
+    _attr_has_entity_name = True
+    _attr_should_poll = False
+    _attr_icon = "mdi:brain"
+    _attr_translation_key = "reset_learning"
+
+    def __init__(self, config_entry, unique_id: str, coordinator) -> None:
+        """Initialize the learning reset button."""
+        super().__init__(coordinator=coordinator)
+        self._attr_unique_id = f"{unique_id}_Reset Behavioral Learning"
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, unique_id)},
+            name=config_entry.data["name"],
+        )
+
+    async def async_press(self) -> None:
+        """Clear all learned offsets and refresh the decision."""
+        self.coordinator.learner.reset()
         await self.coordinator.async_refresh()

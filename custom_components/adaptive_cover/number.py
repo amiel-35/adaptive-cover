@@ -52,4 +52,3 @@ class AdaptiveCoverOffsetNumber(CoordinatorEntity, NumberEntity):
         new_options[self._key] = int(value)
         self.hass.config_entries.async_update_entry(self.config_entry, options=new_options)
         self.async_write_ha_state()
-        await self.coordinator.async_refresh()

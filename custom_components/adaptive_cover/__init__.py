@@ -2,15 +2,22 @@
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import Mapping
 import datetime as dt
+from enum import Enum
+import math
+from numbers import Integral, Real
+import platform as python_platform
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import Platform
+from homeassistant.const import Platform, __version__ as ha_version
 from homeassistant.core import HomeAssistant, ServiceCall, State
 from homeassistant.helpers.event import (
     async_track_state_change_event,
 )
 import homeassistant.helpers.config_validation as cv
+from homeassistant.util import dt as dt_util
 import json
 import os
 from pathlib import Path
@@ -30,15 +37,33 @@ from .const import (
     CONF_START_ENTITY,
     CONF_WORKDAY_ENTITY,
     CONF_WIND_ENTITY,
+    DIAGNOSTICS_SCHEMA_VERSION,
     DOMAIN,
+    INTEGRATION_VERSION,
+    SETTINGS_SCHEMA_VERSION,
     _LOGGER,
     normalize_options,
     validate_options,
 )
 from .coordinator import AdaptiveDataUpdateCoordinator
+from .diagnostic_helpers import dated_filename, position_diagnostics
 
 PLATFORMS = [Platform.SENSOR, Platform.SWITCH, Platform.BINARY_SENSOR, Platform.BUTTON, Platform.SELECT, Platform.TIME, Platform.NUMBER]
 CONF_SUN = ["sun.sun"]
+TRACKED_OPTION_KEYS = [
+    CONF_TEMP_ENTITY,
+    CONF_PRESENCE_ENTITY,
+    CONF_WEATHER_ENTITY,
+    CONF_END_ENTITY,
+    CONF_WINDOW_ENTITY,
+    CONF_RAIN_ENTITY,
+    CONF_WIND_ENTITY,
+    CONF_OUTSIDETEMP_ENTITY,
+    CONF_LUX_ENTITY,
+    CONF_IRRADIANCE_ENTITY,
+    CONF_WORKDAY_ENTITY,
+    CONF_START_ENTITY,
+]
 
 
 def _normalize_options(options: dict | None) -> dict:
@@ -53,24 +78,60 @@ def _config_file_path(hass: HomeAssistant, filename: str) -> str:
     return hass.config.path(filename)
 
 
+def _export_filename(call: ServiceCall, base_name: str) -> str:
+    """Resolve a dated local filename from service data."""
+    filename = call.data.get("filename") or base_name
+    return dated_filename(
+        filename,
+        dt_util.now(),
+        include_date=call.data.get("include_date", True),
+    )
+
+
 def _json_safe(value):
     """Zamień obiekty Home Assistant i runtime na wartości bezpieczne dla JSON."""
     if isinstance(value, State):
+        context = value.context
+        if context.user_id:
+            origin = "user"
+        elif context.parent_id:
+            origin = "automation_or_service"
+        else:
+            origin = "system"
         return {
             "entity_id": value.entity_id,
             "state": value.state,
             "attributes": _json_safe(dict(value.attributes)),
             "last_changed": value.last_changed.isoformat(),
             "last_updated": value.last_updated.isoformat(),
+            "last_reported": getattr(value, "last_reported", value.last_updated).isoformat(),
+            "age_seconds": max(
+                0.0,
+                (dt.datetime.now(dt.UTC) - value.last_updated).total_seconds(),
+            ),
+            "context": {
+                "id": context.id,
+                "parent_id": context.parent_id,
+                "origin": origin,
+            },
         }
     if isinstance(value, dt.datetime | dt.date | dt.time):
         return value.isoformat()
     if isinstance(value, dt.timedelta):
         return value.total_seconds()
-    if isinstance(value, dict):
+    if isinstance(value, Enum):
+        return _json_safe(value.value)
+    if isinstance(value, Mapping):
         return {str(key): _json_safe(item) for key, item in value.items()}
-    if isinstance(value, list | tuple | set):
+    if isinstance(value, list | tuple | set | frozenset):
         return [_json_safe(item) for item in value]
+    if isinstance(value, Integral) and not isinstance(value, bool):
+        return int(value)
+    if isinstance(value, Real):
+        numeric = float(value)
+        return numeric if math.isfinite(numeric) else None
+    if isinstance(value, Path | Exception):
+        return str(value)
     return value
 
 
@@ -136,13 +197,31 @@ def _cover_diagnostics(
             ),
         }
 
+    current_position = _cover_position_from_snapshot(snapshot, cover_type)
+    position_report = position_diagnostics(
+        current_position,
+        target_position_int,
+        options.get("delta_position", 1),
+    )
+    manual_since = (
+        getattr(manager, "manual_control_time", {}).get(entity_id)
+        if manager is not None
+        else None
+    )
+    manual_until = (
+        manual_since + manager.reset_duration
+        if manual_since is not None and manager is not None
+        else None
+    )
+
     return {
         "entity_id": entity_id,
         "available": (snapshot or {}).get("available", False),
         "ha_state": (snapshot or {}).get("state"),
         "friendly_name": ((snapshot or {}).get("attributes") or {}).get("friendly_name"),
-        "current_position": _cover_position_from_snapshot(snapshot, cover_type),
+        "current_position": current_position,
         "target_position": target_position_int,
+        **position_report,
         "cover_status": (
             getattr(manager, "cover_status", {}).get(entity_id)
             if manager is not None
@@ -178,9 +257,220 @@ def _cover_diagnostics(
             if coordinator is not None
             else None
         ),
+        "command_generation": (
+            getattr(coordinator, "_command_generation", {}).get(entity_id)
+            if coordinator is not None
+            else None
+        ),
+        "manual_override_since": manual_since,
+        "manual_override_until": manual_until,
         "movement_checks": movement_checks,
         "state_snapshot": snapshot,
     }
+
+
+def _enum_value(value):
+    """Return a stable JSON representation for Home Assistant enums."""
+    return getattr(value, "value", value)
+
+
+def _task_diagnostics(coordinator: AdaptiveDataUpdateCoordinator) -> dict:
+    """Return active task state merged with retained retry metadata."""
+    entities = set(coordinator.verify_task_metadata) | set(coordinator.verify_tasks)
+    result = {}
+    for entity_id in sorted(entities):
+        task = coordinator.verify_tasks.get(entity_id)
+        result[entity_id] = dict(
+            coordinator.verify_task_metadata.get(entity_id, {})
+        ) | {
+            "task_present": task is not None,
+            "task_name": task.get_name() if task is not None else None,
+            "task_done": task.done() if task is not None else None,
+            "task_cancelled": task.cancelled() if task is not None else None,
+        }
+    return result
+
+
+def _coordinator_runtime(coordinator: AdaptiveDataUpdateCoordinator | None) -> dict:
+    """Return complete bounded runtime diagnostics for one coordinator."""
+    if coordinator is None:
+        return {"coordinator_loaded": False}
+
+    manager = coordinator.manager
+    data = getattr(coordinator, "data", None)
+    last_exception = getattr(coordinator, "last_exception", None)
+    return {
+        "coordinator_loaded": True,
+        "state": getattr(coordinator, "state", None),
+        "default_state": getattr(coordinator, "default_state", None),
+        "climate_state": getattr(coordinator, "climate_state", None),
+        "control_method": getattr(coordinator, "control_method", None),
+        "switches": {
+            "switch_mode": getattr(coordinator, "switch_mode", None),
+            "control_toggle": getattr(coordinator, "control_toggle", None),
+            "manual_toggle": getattr(coordinator, "manual_toggle", None),
+            "temp_toggle": getattr(coordinator, "temp_toggle", None),
+            "lux_toggle": getattr(coordinator, "lux_toggle", None),
+            "irradiance_toggle": getattr(coordinator, "irradiance_toggle", None),
+            "strict_sun_block_toggle": getattr(
+                coordinator, "strict_sun_block_toggle", None
+            ),
+            "dry_run_toggle": getattr(coordinator, "dry_run_toggle", None),
+        },
+        "health": {
+            "started_at": coordinator._started_at,
+            "uptime_seconds": (
+                dt.datetime.now(dt.UTC) - coordinator._started_at
+            ).total_seconds(),
+            "update_count": coordinator._update_count,
+            "last_update_success": getattr(
+                coordinator, "last_update_success", None
+            ),
+            "last_exception": (
+                f"{type(last_exception).__name__}: {last_exception}"
+                if last_exception
+                else None
+            ),
+            "last_update_started_at": coordinator._last_update_started_at,
+            "last_update_finished_at": coordinator._last_update_finished_at,
+            "last_update_duration_ms": coordinator._last_update_duration_ms,
+            "last_update_error": coordinator._last_update_error,
+            "first_refresh": coordinator.first_refresh,
+            "state_change_pending": coordinator.state_change,
+            "cover_state_change_pending": coordinator.cover_state_change,
+            "timed_refresh_pending": coordinator.timed_refresh,
+            "unloading": coordinator._unloading,
+            "diagnostic_refresh": coordinator._diagnostic_refresh,
+        },
+        "schedule": {
+            "now_local": dt_util.now(),
+            "adaptive_time_ok": bool(coordinator.check_adaptive_time),
+            "adaptive_movement_allowed": bool(
+                coordinator.adaptive_movement_allowed
+            ),
+            "start_time": coordinator._start_time,
+            "end_time": coordinator._end_time,
+            "scheduled_end_time": coordinator._scheduled_time,
+            "sun_start_time": coordinator._sun_start_time,
+            "sun_end_time": coordinator._sun_end_time,
+            "night_purge_active": getattr(
+                coordinator.last_decision, "code", None
+            )
+            == "night_purge",
+            "night_purge_next_close": coordinator._night_purge_scheduled_time,
+        },
+        "forecast_cache": {
+            "entity": coordinator._forecast_entity,
+            "temperature": coordinator._forecast_temperature,
+            "fetched_at": coordinator._forecast_fetched_at,
+        },
+        "coordinator_data": {
+            "states": getattr(data, "states", {}),
+            "attributes": getattr(data, "attributes", {}),
+        },
+        "wait_for_target": coordinator.wait_for_target,
+        "target_call": coordinator.target_call,
+        "verify_tasks": _task_diagnostics(coordinator),
+        "decision_history": list(coordinator.decision_history),
+        "manager": {
+            "manual_control": manager.manual_control,
+            "manual_control_time": manager.manual_control_time,
+            "manual_reset_duration_seconds": manager.reset_duration.total_seconds(),
+            "cover_status": manager.cover_status,
+            "last_skip_reason": manager.last_skip_reason,
+            "status_reason": manager.status_reason,
+            "last_service_call": manager.last_service_call,
+            "last_service_error": manager.last_service_error,
+            "movement_history": manager.movement_history,
+            "command_history": manager.command_history,
+            "manual_controlled": manager.manual_controlled,
+        },
+        "behavioral_learning": coordinator.learner.diagnostics(),
+    }
+
+
+def _build_entry_diagnostics(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    refresh_status: dict | None = None,
+) -> dict:
+    """Build one complete diagnostics entry shared by both export paths."""
+    coordinator = hass.data.get(DOMAIN, {}).get(entry.entry_id)
+    options = _normalize_options(entry.options)
+    cover_entities = options.get(CONF_ENTITIES) or []
+    related_entities = set(CONF_SUN)
+    related_entities.update(cover_entities)
+    for key in TRACKED_OPTION_KEYS:
+        if entity_id := options.get(key):
+            related_entities.add(entity_id)
+
+    coordinator_data = getattr(getattr(coordinator, "data", None), "attributes", {})
+    target_position = coordinator_data.get("target_position")
+    return {
+        "entry_id": entry.entry_id,
+        "title": entry.title,
+        "config_entry": {
+            "version": entry.version,
+            "minor_version": getattr(entry, "minor_version", None),
+            "source": _enum_value(entry.source),
+            "state": _enum_value(entry.state),
+            "disabled_by": _enum_value(entry.disabled_by),
+            "validation_errors": validate_options(options),
+            "options_were_normalized": dict(entry.options) != options,
+        },
+        "refresh": refresh_status,
+        "data": dict(entry.data),
+        "options": options,
+        "configured_covers": cover_entities,
+        "cover_diagnostics": {
+            entity_id: _cover_diagnostics(
+                hass,
+                coordinator,
+                entity_id,
+                target_position,
+                options,
+            )
+            for entity_id in cover_entities
+        },
+        "runtime": _coordinator_runtime(coordinator),
+        "related_entities": {
+            entity_id: _entity_snapshot(hass, entity_id)
+            for entity_id in sorted(related_entities)
+        },
+    }
+
+
+def _build_diagnostics_payload(
+    hass: HomeAssistant,
+    entries: list[ConfigEntry],
+    refresh_results: dict[str, dict] | None = None,
+) -> dict:
+    """Build the shared diagnostics schema version 4 document."""
+    generated_at = dt.datetime.now(dt.UTC)
+    return _json_safe(
+        {
+            "generated_at": generated_at,
+            "generated_at_local": dt_util.as_local(generated_at),
+            "domain": DOMAIN,
+            "schema_version": DIAGNOSTICS_SCHEMA_VERSION,
+            "environment": {
+                "integration_version": INTEGRATION_VERSION,
+                "home_assistant_version": ha_version,
+                "python_version": python_platform.python_version(),
+                "timezone": str(hass.config.time_zone),
+                "home_assistant_state": _enum_value(hass.state),
+                "component_path": str(Path(__file__).resolve().parent),
+            },
+            "entries": {
+                entry.entry_id: _build_entry_diagnostics(
+                    hass,
+                    entry,
+                    (refresh_results or {}).get(entry.entry_id),
+                )
+                for entry in entries
+            },
+        }
+    )
 
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:  # noqa: C901
@@ -188,7 +478,7 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:  # noqa: C901
 
     async def export_config(call: ServiceCall) -> None:
         """Export all config entries to a JSON file."""
-        filename = call.data.get("filename", "adaptive_cover_settings.json")
+        filename = _export_filename(call, "adaptive_cover_settings.json")
         filepath = _config_file_path(hass, filename)
 
         entries = {}
@@ -196,15 +486,31 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:  # noqa: C901
             entries[entry.entry_id] = {
                 "entry_id": entry.entry_id,
                 "title": entry.title,
+                "version": entry.version,
+                "minor_version": getattr(entry, "minor_version", None),
+                "source": _enum_value(entry.source),
                 "data": dict(entry.data),
                 "options": _normalize_options(entry.options),
+                "validation_errors": validate_options(
+                    _normalize_options(entry.options)
+                ),
             }
 
-        export_data = {"schema_version": 3, "entries": entries}
+        generated_at = dt.datetime.now(dt.UTC)
+        export_data = {
+            "generated_at": generated_at,
+            "generated_at_local": dt_util.as_local(generated_at),
+            "domain": DOMAIN,
+            "schema_version": SETTINGS_SCHEMA_VERSION,
+            "integration_version": INTEGRATION_VERSION,
+            "home_assistant_version": ha_version,
+            "timezone": str(hass.config.time_zone),
+            "entries": entries,
+        }
 
         def write_file():
             with open(filepath, "w", encoding="utf-8") as f:
-                json.dump(export_data, f, indent=4)
+                json.dump(_json_safe(export_data), f, indent=4, ensure_ascii=False)
 
         await hass.async_add_executor_job(write_file)
         _LOGGER.info("Exported Adaptive Cover configuration to %s", filepath)
@@ -287,114 +593,50 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:  # noqa: C901
 
     async def export_diagnostics(call: ServiceCall) -> None:
         """Export current config, runtime decisions and related HA states."""
-        filename = call.data.get("filename", "adaptive_cover_diagnostics.json")
+        filename = _export_filename(call, "adaptive_cover_diagnostics.json")
         refresh = call.data.get("refresh", True)
         filepath = _config_file_path(hass, filename)
-
-        export_data = {
-            "generated_at": dt.datetime.now(dt.UTC).isoformat(),
-            "domain": DOMAIN,
-            "schema_version": 3,
-            "entries": {},
-        }
-
-        tracked_option_keys = [
-            CONF_TEMP_ENTITY,
-            CONF_PRESENCE_ENTITY,
-            CONF_WEATHER_ENTITY,
-            CONF_END_ENTITY,
-            CONF_WINDOW_ENTITY,
-            CONF_RAIN_ENTITY,
-            CONF_WIND_ENTITY,
-            CONF_OUTSIDETEMP_ENTITY,
-            CONF_LUX_ENTITY,
-            CONF_IRRADIANCE_ENTITY,
-            CONF_WORKDAY_ENTITY,
-            CONF_START_ENTITY,
-        ]
-
-        for entry in hass.config_entries.async_entries(DOMAIN):
+        entries = hass.config_entries.async_entries(DOMAIN)
+        refresh_results = {}
+        for entry in entries:
             coordinator = hass.data.get(DOMAIN, {}).get(entry.entry_id)
             if refresh and coordinator is not None:
-                await coordinator.async_request_refresh()
-
-            options = _normalize_options(entry.options)
-            cover_entities = options.get(CONF_ENTITIES) or []
-            related_entities = set(CONF_SUN)
-            related_entities.update(cover_entities)
-            for key in tracked_option_keys:
-                entity_id = options.get(key)
-                if entity_id:
-                    related_entities.add(entity_id)
-
-            runtime = {}
-            if coordinator is not None:
-                manager = getattr(coordinator, "manager", None)
-                runtime = {
-                    "coordinator_loaded": True,
-                    "state": getattr(coordinator, "state", None),
-                    "default_state": getattr(coordinator, "default_state", None),
-                    "climate_state": getattr(coordinator, "climate_state", None),
-                    "control_method": getattr(coordinator, "control_method", None),
-                    "switches": {
-                        "switch_mode": getattr(coordinator, "switch_mode", None),
-                        "control_toggle": getattr(coordinator, "control_toggle", None),
-                        "manual_toggle": getattr(coordinator, "manual_toggle", None),
-                        "temp_toggle": getattr(coordinator, "temp_toggle", None),
-                        "lux_toggle": getattr(coordinator, "lux_toggle", None),
-                        "irradiance_toggle": getattr(coordinator, "irradiance_toggle", None),
-                        "strict_sun_block_toggle": getattr(coordinator, "strict_sun_block_toggle", None),
-                        "dry_run_toggle": getattr(coordinator, "dry_run_toggle", None),
-                    },
-                    "coordinator_data": {
-                        "states": getattr(getattr(coordinator, "data", None), "states", {}),
-                        "attributes": getattr(getattr(coordinator, "data", None), "attributes", {}),
-                    },
-                    "wait_for_target": getattr(coordinator, "wait_for_target", {}),
-                    "target_call": getattr(coordinator, "target_call", {}),
-                    "manager": {
-                        "manual_control": getattr(manager, "manual_control", {}),
-                        "manual_control_time": getattr(manager, "manual_control_time", {}),
-                        "cover_status": getattr(manager, "cover_status", {}),
-                        "last_skip_reason": getattr(manager, "last_skip_reason", {}),
-                        "status_reason": getattr(manager, "status_reason", {}),
-                        "last_service_call": getattr(manager, "last_service_call", {}),
-                        "last_service_error": getattr(manager, "last_service_error", {}),
-                        "movement_history": getattr(manager, "movement_history", {}),
-                        "manual_controlled": getattr(manager, "manual_controlled", []),
-                    },
-                    "behavioral_learning": coordinator.learner.diagnostics(),
-                }
+                started = dt.datetime.now(dt.UTC)
+                try:
+                    async with asyncio.timeout(30):
+                        await coordinator.async_diagnostic_refresh()
+                except Exception as err:  # noqa: BLE001
+                    refresh_results[entry.entry_id] = {
+                        "requested": True,
+                        "success": False,
+                        "started_at": started,
+                        "finished_at": dt.datetime.now(dt.UTC),
+                        "error": f"{type(err).__name__}: {err}",
+                    }
+                else:
+                    refresh_results[entry.entry_id] = {
+                        "requested": True,
+                        "success": bool(coordinator.last_update_success),
+                        "started_at": started,
+                        "finished_at": dt.datetime.now(dt.UTC),
+                        "error": coordinator._last_update_error,
+                    }
             else:
-                runtime = {"coordinator_loaded": False}
+                refresh_results[entry.entry_id] = {
+                    "requested": bool(refresh),
+                    "success": None,
+                    "error": (
+                        "coordinator_not_loaded"
+                        if refresh and coordinator is None
+                        else None
+                    ),
+                }
 
-            coordinator_data = getattr(getattr(coordinator, "data", None), "attributes", {})
-            target_position = coordinator_data.get("target_position")
-
-            export_data["entries"][entry.entry_id] = {
-                "entry_id": entry.entry_id,
-                "title": entry.title,
-                "data": dict(entry.data),
-                "options": options,
-                "configured_covers": cover_entities,
-                "cover_diagnostics": {
-                    entity_id: _json_safe(
-                        _cover_diagnostics(
-                            hass,
-                            coordinator,
-                            entity_id,
-                            target_position,
-                            options,
-                        )
-                    )
-                    for entity_id in cover_entities
-                },
-                "runtime": _json_safe(runtime),
-                "related_entities": {
-                    entity_id: _entity_snapshot(hass, entity_id)
-                    for entity_id in sorted(related_entities)
-                },
-            }
+        export_data = _build_diagnostics_payload(
+            hass,
+            entries,
+            refresh_results,
+        )
 
         def write_file():
             with open(filepath, "w", encoding="utf-8") as f:
@@ -409,6 +651,7 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:  # noqa: C901
         export_config,
         schema=vol.Schema({
             vol.Optional("filename", default="adaptive_cover_settings.json"): cv.string,
+            vol.Optional("include_date", default=True): cv.boolean,
         })
     )
 
@@ -427,6 +670,7 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:  # noqa: C901
         export_diagnostics,
         schema=vol.Schema({
             vol.Optional("filename", default="adaptive_cover_diagnostics.json"): cv.string,
+            vol.Optional("include_date", default=True): cv.boolean,
             vol.Optional("refresh", default=True): cv.boolean,
         })
     )
@@ -546,3 +790,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Handle options update."""
     await hass.config_entries.async_reload(entry.entry_id)
+
+
+# Home Assistant discovers diagnostics during startup. Importing it here ensures
+# the loader does not perform its first disk import from inside the event loop.
+from . import diagnostics as diagnostics  # noqa: E402

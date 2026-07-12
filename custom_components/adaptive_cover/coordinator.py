@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import homeassistant.util.dt as dt_util
 import asyncio
+from collections import deque
 import datetime as dt
 from dataclasses import dataclass
+from time import perf_counter
 
 import numpy as np
 from homeassistant.components.cover import DOMAIN as COVER_DOMAIN
@@ -37,7 +39,7 @@ from .calculation import (
     NormalCoverState,
 )
 from .learning import BehavioralLearner
-from .decision import DecisionResult, decision_priority
+from .decision import DecisionResult, decision_priority, position_requires_move
 from .const import (
     _LOGGER,
     ATTR_POSITION,
@@ -200,6 +202,8 @@ class AdaptiveDataUpdateCoordinator(DataUpdateCoordinator[AdaptiveCoverData]):
         self._irradiance_low_light_state: bool | None = None
         self._last_direct_sun_at: dt.datetime | None = None
         self.last_decision: DecisionResult | None = None
+        self.last_decision_trace: list[dict] = []
+        self.decision_history: deque[dict] = deque(maxlen=50)
         self.last_climate_data: ClimateCoverData | None = None
         self._start_time = None
         self._sun_end_time = None
@@ -219,8 +223,16 @@ class AdaptiveDataUpdateCoordinator(DataUpdateCoordinator[AdaptiveCoverData]):
         self.wait_for_target = {}
         self.target_call = {}
         self.verify_tasks = {}
+        self.verify_task_metadata: dict[str, dict] = {}
         self._command_generation: dict[str, int] = {}
         self._unloading = False
+        self._diagnostic_refresh = False
+        self._started_at = dt.datetime.now(dt.UTC)
+        self._update_count = 0
+        self._last_update_started_at: dt.datetime | None = None
+        self._last_update_finished_at: dt.datetime | None = None
+        self._last_update_duration_ms: float | None = None
+        self._last_update_error: str | None = None
         self._active_options = normalize_options(config_entry.options)
         self.ignore_intermediate_states = initial_options[
             CONF_MANUAL_IGNORE_INTERMEDIATE
@@ -241,6 +253,47 @@ class AdaptiveDataUpdateCoordinator(DataUpdateCoordinator[AdaptiveCoverData]):
         self.first_refresh = True
         await super().async_config_entry_first_refresh()
         self.logger.debug("Config entry first refresh")
+
+    async def async_diagnostic_refresh(self) -> None:
+        """Refresh calculations without issuing physical cover commands."""
+        self._diagnostic_refresh = True
+        try:
+            await self.async_request_refresh()
+        finally:
+            self._diagnostic_refresh = False
+
+    def _create_background_task(self, target, name: str):
+        """Create a lifecycle-bound task which never delays Home Assistant startup."""
+        entry_create_task = getattr(
+            self.config_entry,
+            "async_create_background_task",
+            None,
+        )
+        if entry_create_task is not None:
+            return entry_create_task(self.hass, target, name)
+
+        hass_create_task = getattr(self.hass, "async_create_background_task", None)
+        if hass_create_task is not None:
+            return hass_create_task(target, name)
+
+        return self.hass.async_create_task(target, name)
+
+    def _update_verify_metadata(
+        self,
+        entity: str,
+        *,
+        expected_generation: int | None = None,
+        **changes,
+    ) -> None:
+        """Update the bounded retry snapshot retained for one cover."""
+        metadata = self.verify_task_metadata.setdefault(entity, {})
+        if (
+            expected_generation is not None
+            and metadata.get("generation") != expected_generation
+        ):
+            return
+        metadata.update(changes)
+        metadata["updated_at"] = dt.datetime.now(dt.UTC)
 
     async def async_timed_refresh(self, event) -> None:
         """Control state at end time."""
@@ -438,6 +491,22 @@ class AdaptiveDataUpdateCoordinator(DataUpdateCoordinator[AdaptiveCoverData]):
         self._scheduled_time = self._end_time
 
     async def _async_update_data(self) -> AdaptiveCoverData:
+        """Track coordinator health around one complete data refresh."""
+        started = perf_counter()
+        self._update_count += 1
+        self._last_update_started_at = dt.datetime.now(dt.UTC)
+        self._last_update_error = None
+        try:
+            return await self._async_calculate_update_data()
+        except Exception as err:  # noqa: BLE001
+            self._last_update_error = f"{type(err).__name__}: {err}"
+            raise
+        finally:
+            self._last_update_finished_at = dt.datetime.now(dt.UTC)
+            self._last_update_duration_ms = round((perf_counter() - started) * 1000, 3)
+
+    async def _async_calculate_update_data(self) -> AdaptiveCoverData:
+        """Calculate and apply one Adaptive Cover update."""
         self.logger.debug("Updating data")
         options = normalize_options(self.config_entry.options)
         self._active_options = options
@@ -461,6 +530,7 @@ class AdaptiveDataUpdateCoordinator(DataUpdateCoordinator[AdaptiveCoverData]):
             self.climate_mode_data(options, cover_data)
         else:
             self.last_climate_data = None
+            self.last_decision_trace = []
             self.logger.debug("Control method is %s", self.control_method)
 
         # calculate the state of the cover
@@ -483,14 +553,15 @@ class AdaptiveDataUpdateCoordinator(DataUpdateCoordinator[AdaptiveCoverData]):
             await self.async_timed_end_time()
 
         # Handle types of changes
-        if self.state_change:
-            await self.async_handle_state_change(state, options)
-        if self.cover_state_change:
-            await self.async_handle_cover_state_change(state)
-        if self.first_refresh:
-            await self.async_handle_first_refresh(state, options)
-        if self.timed_refresh:
-            await self.async_handle_timed_refresh(state, options)
+        if not self._diagnostic_refresh:
+            if self.state_change:
+                await self.async_handle_state_change(state, options)
+            if self.cover_state_change:
+                await self.async_handle_cover_state_change(state)
+            if self.first_refresh:
+                await self.async_handle_first_refresh(state, options)
+            if self.timed_refresh:
+                await self.async_handle_timed_refresh(state, options)
 
         normal_cover = self.normal_cover_state.cover
         # Run the solar_times method in a separate thread
@@ -530,6 +601,24 @@ class AdaptiveDataUpdateCoordinator(DataUpdateCoordinator[AdaptiveCoverData]):
                 ),
             }.get(self.window_open_action, "Okno otwarte: wstrzymano adaptację.")
 
+        if not any(
+            item.get("code") == explanation and item.get("selected")
+            for item in self.last_decision_trace
+        ):
+            for item in self.last_decision_trace:
+                if item.get("selected"):
+                    item["selected"] = False
+                    item["outcome"] = "overridden_by_runtime_policy"
+            self.last_decision_trace.append(
+                {
+                    "code": explanation,
+                    "priority": decision_priority(explanation),
+                    "active": True,
+                    "selected": True,
+                    "outcome": "selected",
+                }
+            )
+
         self.last_decision = DecisionResult(
             target_position=state,
             code=explanation,
@@ -553,6 +642,20 @@ class AdaptiveDataUpdateCoordinator(DataUpdateCoordinator[AdaptiveCoverData]):
                     get_safe_state(self.hass, options.get(CONF_IRRADIANCE_ENTITY))
                 ),
             },
+        )
+        learned_targets = {
+            entity: self._target_for_entity(entity, state)
+            for entity in self.entities
+        }
+        self.decision_history.append(
+            {
+                "timestamp": dt.datetime.now(dt.UTC),
+                "decision": self.last_decision.as_dict(),
+                "decision_trace": list(self.last_decision_trace),
+                "learned_targets": learned_targets,
+                "cover_status": dict(self.manager.cover_status),
+                "status_reason": dict(self.manager.status_reason),
+            }
         )
 
         return AdaptiveCoverData(
@@ -581,10 +684,8 @@ class AdaptiveDataUpdateCoordinator(DataUpdateCoordinator[AdaptiveCoverData]):
                 "blind_spot": options.get(CONF_BLIND_SPOT_ELEVATION),
                 "target_position": state,
                 "decision": self.last_decision.as_dict(),
-                "learned_targets": {
-                    entity: self._target_for_entity(entity, state)
-                    for entity in self.entities
-                },
+                "decision_trace": list(self.last_decision_trace),
+                "learned_targets": learned_targets,
                 "dry_run": self.dry_run_toggle,
                 "window_open": self.is_window_open,
                 "window_open_action": self.window_open_action,
@@ -685,6 +786,7 @@ class AdaptiveDataUpdateCoordinator(DataUpdateCoordinator[AdaptiveCoverData]):
                 self.wait_for_target,
                 self.target_call,
                 self.manual_threshold,
+                position_tolerance=self.min_change,
                 current_temp=(climate.get_current_temperature if climate else None),
                 is_summer=(climate.is_summer if climate else False),
             )
@@ -793,7 +895,9 @@ class AdaptiveDataUpdateCoordinator(DataUpdateCoordinator[AdaptiveCoverData]):
         block_reason = self.movement_block_reason(entity, state, options)
         if block_reason is None:
             await self.async_set_position(entity, state)
-        elif self.manager.cover_status.get(entity) != "blocked":
+        elif block_reason in {"cooldown", "hourly_move_limit", "daily_move_limit"}:
+            self.manager.set_status(entity, "blocked", block_reason)
+        else:
             self.manager.set_status(entity, "skipped", block_reason)
 
     def _target_for_entity(self, entity: str, state: int) -> int:
@@ -857,12 +961,24 @@ class AdaptiveDataUpdateCoordinator(DataUpdateCoordinator[AdaptiveCoverData]):
                 self.wait_for_target[entity] = False
                 self.manager.record_move(entity, service, service_data, dry_run=True)
                 self.manager.set_status(entity, "dry_run", f"would_set_{state}")
+                self._update_verify_metadata(
+                    entity,
+                    generation=generation,
+                    target=state,
+                    state="dry_run",
+                    outcome="not_executed",
+                )
                 self.logger.info("Dry run: skipped %s with data %s", service, service_data)
                 return
 
             # 1. Anuluj poprzednie sprawdzanie dla tej rolety, jeśli istnieje
             if entity in self.verify_tasks:
                 self.verify_tasks[entity].cancel()
+                self._update_verify_metadata(
+                    entity,
+                    state="cancelled",
+                    outcome="replaced_by_new_command",
+                )
 
             try:
                 await self.hass.services.async_call(
@@ -875,12 +991,42 @@ class AdaptiveDataUpdateCoordinator(DataUpdateCoordinator[AdaptiveCoverData]):
                 self.wait_for_target[entity] = False
                 self.manager.last_service_error[entity] = str(err)
                 self.manager.set_status(entity, "blocked", "service_call_failed")
+                self._update_verify_metadata(
+                    entity,
+                    generation=generation,
+                    target=state,
+                    state="failed",
+                    outcome="service_call_failed",
+                    error=str(err),
+                )
                 self.logger.error("Unable to move %s: %s", entity, err)
                 return
             self.manager.record_move(entity, service, service_data)
             self.manager.set_status(entity, "waiting_for_target", f"target_{state}")
 
-            task = self.hass.async_create_task(
+            wait_time = max(
+                45,
+                int(float(self.global_cooldown) * 60) + 1,
+                int(float(self.time_threshold) * 60) + 1,
+            )
+            self.verify_task_metadata[entity] = {
+                "created_at": dt.datetime.now(dt.UTC),
+                "updated_at": dt.datetime.now(dt.UTC),
+                "generation": generation,
+                "target": state,
+                "service": service,
+                "service_data": dict(service_data),
+                "state": "scheduled",
+                "outcome": None,
+                "attempt": 0,
+                "max_retries": 2,
+                "wait_seconds": wait_time,
+                "next_check_at": dt.datetime.now(dt.UTC)
+                + dt.timedelta(seconds=wait_time),
+                "last_observed_position": self._get_current_position(entity),
+                "enforce_current_target": enforce_current_target,
+            }
+            task = self._create_background_task(
                 self.async_verify_and_retry(
                     entity,
                     state,
@@ -888,15 +1034,16 @@ class AdaptiveDataUpdateCoordinator(DataUpdateCoordinator[AdaptiveCoverData]):
                     service_data,
                     generation=generation,
                     enforce_current_target=enforce_current_target,
-                    wait_time=max(
-                        45,
-                        int(float(self.global_cooldown) * 60) + 1,
-                        int(float(self.time_threshold) * 60) + 1,
-                    ),
+                    wait_time=wait_time,
                     max_retries=2,
-                )
+                ),
+                f"adaptive_cover verify target for {entity}",
             )
             self.verify_tasks[entity] = task
+        else:
+            self.wait_for_target[entity] = False
+            self.target_call[entity] = state
+            self.manager.set_status(entity, "auto", "target_within_tolerance")
 
     async def async_verify_and_retry(
         self,
@@ -913,6 +1060,14 @@ class AdaptiveDataUpdateCoordinator(DataUpdateCoordinator[AdaptiveCoverData]):
         """Verify if cover reached the target and retry if needed."""
         try:
             for attempt in range(1, max_retries + 1):
+                self._update_verify_metadata(
+                    entity,
+                    expected_generation=generation,
+                    state="waiting",
+                    attempt=attempt,
+                    next_check_at=dt.datetime.now(dt.UTC)
+                    + dt.timedelta(seconds=wait_time),
+                )
                 await asyncio.sleep(wait_time)
 
                 if self._retry_is_stale(
@@ -923,16 +1078,43 @@ class AdaptiveDataUpdateCoordinator(DataUpdateCoordinator[AdaptiveCoverData]):
                 ):
                     self.wait_for_target[entity] = False
                     self.manager.set_status(entity, "skipped", "retry_conditions_changed")
+                    self._update_verify_metadata(
+                        entity,
+                        expected_generation=generation,
+                        state="finished",
+                        outcome="retry_conditions_changed",
+                    )
                     return
 
                 if not self.wait_for_target.get(entity):
                     self.manager.set_status(entity, "auto", "target_verified")
+                    self._update_verify_metadata(
+                        entity,
+                        expected_generation=generation,
+                        state="finished",
+                        outcome="target_verified_by_event",
+                    )
                     return
 
                 current_pos = self._get_current_position(entity)
-                if current_pos == target_state:
+                self._update_verify_metadata(
+                    entity,
+                    expected_generation=generation,
+                    last_observed_position=current_pos,
+                )
+                if current_pos is not None and not position_requires_move(
+                    current_pos,
+                    target_state,
+                    self.min_change,
+                ):
                     self.wait_for_target[entity] = False
                     self.manager.set_status(entity, "auto", "target_verified")
+                    self._update_verify_metadata(
+                        entity,
+                        expected_generation=generation,
+                        state="finished",
+                        outcome="target_within_tolerance",
+                    )
                     return
 
                 if not self.manager.can_move(
@@ -942,6 +1124,12 @@ class AdaptiveDataUpdateCoordinator(DataUpdateCoordinator[AdaptiveCoverData]):
                     self.max_moves_per_day,
                 ):
                     self.wait_for_target[entity] = False
+                    self._update_verify_metadata(
+                        entity,
+                        expected_generation=generation,
+                        state="finished",
+                        outcome=self.manager.last_skip_reason.get(entity, "movement_limit"),
+                    )
                     return
 
                 self.manager.set_status(entity, "retrying", f"retry_{attempt}")
@@ -956,11 +1144,38 @@ class AdaptiveDataUpdateCoordinator(DataUpdateCoordinator[AdaptiveCoverData]):
                     self.manager.last_service_error[entity] = str(err)
                     self.manager.set_status(entity, "blocked", "retry_service_failed")
                     self.wait_for_target[entity] = False
+                    self._update_verify_metadata(
+                        entity,
+                        expected_generation=generation,
+                        state="failed",
+                        outcome="retry_service_failed",
+                        error=str(err),
+                    )
                     return
                 self.manager.record_move(entity, service, service_data)
+                self._update_verify_metadata(
+                    entity,
+                    expected_generation=generation,
+                    state="retry_sent",
+                    outcome=None,
+                )
 
             self.wait_for_target[entity] = False
             self.manager.set_status(entity, "blocked", "target_not_reached")
+            self._update_verify_metadata(
+                entity,
+                expected_generation=generation,
+                state="finished",
+                outcome="target_not_reached",
+            )
+        except asyncio.CancelledError:
+            self._update_verify_metadata(
+                entity,
+                expected_generation=generation,
+                state="cancelled",
+                outcome="task_cancelled",
+            )
+            raise
         finally:
             if self.verify_tasks.get(entity) is asyncio.current_task():
                 self.verify_tasks.pop(entity, None)
@@ -1195,8 +1410,8 @@ class AdaptiveDataUpdateCoordinator(DataUpdateCoordinator[AdaptiveCoverData]):
         """Check if position is different as state."""
         position = self._get_current_position(entity)
         if position is not None:
-            return position != state
-        self.logger.debug("Cover is already at position %s", state)
+            return position_requires_move(position, state, self.min_change)
+        self.logger.debug("No current position available for %s", entity)
         return False
 
     @property
@@ -1213,7 +1428,7 @@ class AdaptiveDataUpdateCoordinator(DataUpdateCoordinator[AdaptiveCoverData]):
         """Check cover positions to reduce calls."""
         position = self._get_current_position(entity)
         if position is not None:
-            condition = abs(position - state) >= self.min_change
+            condition = position_requires_move(position, state, self.min_change)
             self.logger.debug(
                 "Entity: %s,  position: %s, state: %s, delta position: %s, min_change: %s, condition: %s",
                 entity,
@@ -1223,13 +1438,6 @@ class AdaptiveDataUpdateCoordinator(DataUpdateCoordinator[AdaptiveCoverData]):
                 self.min_change,
                 condition,
             )
-            if state in [
-                options.get(CONF_SUNSET_POS),
-                options.get(CONF_DEFAULT_HEIGHT),
-                0,
-                100,
-            ]:
-                condition = True
             return condition
         return True
 
@@ -1404,6 +1612,7 @@ class AdaptiveDataUpdateCoordinator(DataUpdateCoordinator[AdaptiveCoverData]):
         climate.last_direct_sun_at = self._last_direct_sun_at
         climate_state = ClimateCoverState(cover_data, climate)
         self.climate_state = round(climate_state.get_state())
+        self.last_decision_trace = list(climate_state.decision_trace)
         climate_data = climate_state.climate_data
         self.last_climate_data = climate_data
         self.control_method = "intermediate"
@@ -1581,6 +1790,7 @@ class AdaptiveCoverManager:
         self.last_service_call: dict[str, dict] = {}
         self.last_service_error: dict[str, str] = {}
         self.movement_history: dict[str, list[dt.datetime]] = {}
+        self.command_history: dict[str, list[dict]] = {}
 
     def add_covers(self, entity):
         """Update set with entities."""
@@ -1588,6 +1798,7 @@ class AdaptiveCoverManager:
         for cover in entity:
             self.cover_status.setdefault(cover, "auto")
             self.movement_history.setdefault(cover, [])
+            self.command_history.setdefault(cover, [])
 
     def set_status(self, entity_id: str, status: str, reason: str | None = None) -> None:
         """Store current automation status for diagnostics."""
@@ -1646,6 +1857,16 @@ class AdaptiveCoverManager:
             "dry_run": dry_run,
             "time": now.isoformat(),
         }
+        history = self.command_history.setdefault(entity_id, [])
+        history.append(
+            {
+                "service": service,
+                "data": dict(service_data),
+                "dry_run": dry_run,
+                "requested_at": now,
+            }
+        )
+        del history[:-50]
         self.last_service_error.pop(entity_id, None)
 
     def movement_counts(self, period: dt.timedelta) -> dict[str, int]:
@@ -1665,6 +1886,7 @@ class AdaptiveCoverManager:
         wait_target_call,
         target_call,
         manual_threshold,
+        position_tolerance=1,
         current_temp=None,
         is_summer=False,
     ):
@@ -1688,10 +1910,12 @@ class AdaptiveCoverManager:
         if wait_target_call.get(entity_id):
             target = target_call.get(entity_id)
             if target is not None and new_position is not None:
-                # Jeśli silnik zatrzymał się przed osiągnięciem celu, uznajemy to za manualne zatrzymanie!
                 if new_state.state in ["open", "closed", "ok", "stopped"]:
-                    thresh = manual_threshold if manual_threshold is not None else 2
-                    if abs(new_position - target) > thresh:
+                    tolerance = max(
+                        float(position_tolerance),
+                        float(manual_threshold) if manual_threshold is not None else 2.0,
+                    )
+                    if position_requires_move(new_position, target, tolerance):
                         self.logger.debug("Motor stopped at %s instead of target %s. Manual override!", new_position, target)
                         wait_target_call[entity_id] = False
                     else:

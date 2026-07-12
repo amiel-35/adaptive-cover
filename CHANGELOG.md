@@ -2,6 +2,30 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased] - 2026-07-12
+
+### Dodane
+- [Dodane] Wprowadzono wspólny schemat diagnostyki v4 dla eksportu serwisowego i standardowej diagnostyki Home Assistant, obejmujący wersje środowiska, ścieżkę załadowanego komponentu i stan `ConfigEntry`.
+- [Dodane] Dodano ograniczoną historię 50 decyzji i poleceń, ślad oceny reguł, zdrowie koordynatora, czasy odświeżeń, stan cache prognozy oraz szczegółowe metadane zadań retry.
+- [Dodane] Diagnostyka pozycji pokazuje błąd względem celu, efektywną tolerancję i jednoznaczne `target_satisfied`.
+- [Dodane] Diagnostyka BehavioralLearner pokazuje stan odczytu Store, ostatni błąd, ostatnią korektę użytkownika i czas zaplanowania zapisu.
+
+### Zmienione
+- [Zmienione] Podniesiono wersję integracji do `1.5.0`, aby diagnostyka jednoznacznie identyfikowała wdrożenie zawierające schemat v4 i poprawki runtime.
+- [Zmienione] Eksport ustawień używa schematu v4 i zapisuje datę, wersję integracji, wersję HA, strefę czasową, wersję wpisu oraz wynik walidacji opcji.
+- [Zmienione] Eksporty domyślnie dodają lokalną datę do nazwy pliku, a pola nazwy i przełączniki daty są aktywne domyślnie w formularzu usługi.
+- [Zmienione] Diagnostyka domyślnie wykonuje ograniczone do 30 sekund odświeżenie read-only, które przelicza aktualny stan bez wysyłania poleceń ruchu, oraz rejestruje jego wynik i czas.
+
+### Naprawione
+- [Naprawione] Pozycje krańcowe `0%` i `100%` respektują teraz `delta_position`, dzięki czemu urządzenie raportujące np. `97%` nie otrzymuje bez końca poleceń ustawienia `100%`.
+- [Naprawione] Weryfikacja i ponowienia ruchu używają tej samej tolerancji pozycji co główna automatyka, co zapobiega seriom zbędnych retry i fałszywemu osiąganiu limitu dobowego.
+- [Naprawione] Status rolety jest odświeżany po osiągnięciu celu w granicach tolerancji i nie pozostaje błędnie jako `daily_move_limit` lub wcześniejsze pominięcie.
+- [Naprawione] Obliczenia słońca używają `get_astral_observer` zamiast wycofanego `get_astral_location`, usuwając masowe ostrzeżenia kompatybilności przed Home Assistant 2027.7.
+- [Naprawione] Zdarzenie zwrotne z silnika używa `delta_position`, więc niedokładna pozycja krańcowa nie jest błędnie rozpoznawana jako ręczne zatrzymanie rolety.
+- [Naprawione] Opóźniona weryfikacja pozycji działa jako zadanie tła powiązane z `ConfigEntry`, dlatego oczekiwanie na retry nie blokuje zakończenia startu Home Assistant.
+- [Naprawione] Platforma `diagnostics` jest ładowana wraz z pakietem integracji, zamiast wykonywać pierwszy import pliku w pętli zdarzeń Home Assistant.
+- [Naprawione] Wersja Home Assistant w diagnostyce jest pobierana z `homeassistant.const`, zgodnie z aktualnym API, dzięki czemu import platformy nie przerywa ładowania całej integracji.
+
 ## [Unreleased] - 2026-07-11
 
 ### Dodane

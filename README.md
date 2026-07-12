@@ -287,6 +287,19 @@ When climate mode is setup you will also get these entities:
 
 ![entities](https://github.com/basbruss/adaptive-cover/blob/main/images/entities.png)
 
+## Configuration export and diagnostics
+
+The `adaptive_cover.export_config` and `adaptive_cover.export_diagnostics`
+services write schema version 4 JSON files to `/config`. Export filenames are
+prefixed with the current Home Assistant local date by default. Diagnostics
+refresh is enabled by default, limited to 30 seconds, and recalculates data in
+read-only mode without issuing cover movement commands.
+
+Diagnostics include environment and config-entry versions, coordinator health,
+the latest 50 decisions and service commands, evaluated decision rules, retry
+task state, position tolerance, related entity freshness, schedule details and
+BehavioralLearner persistence state.
+
 ## Features Planned
 
 - Manual override controls

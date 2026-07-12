@@ -66,6 +66,8 @@ class BehavioralLearnerTests(unittest.IsolatedAsyncioTestCase):
         await learner.async_load()
         self.assertEqual(34, learner.get_adjusted_position("cover.room", 30))
         self.assertEqual(-0.3, learner.get_temp_offset("cover.room"))
+        self.assertTrue(learner.diagnostics()["storage_loaded"])
+        self.assertIsNotNone(learner.diagnostics()["last_load_at"])
 
     async def test_override_updates_and_schedules_persistence(self) -> None:
         """Learn bounded position and temperature preferences."""
@@ -74,6 +76,11 @@ class BehavioralLearnerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(48, learner.get_adjusted_position("cover.room", 50))
         self.assertEqual(-0.1, learner.get_temp_offset("cover.room"))
         self.assertEqual(1, learner._store.delayed_payload["override_counts"]["cover.room"])
+        self.assertEqual(
+            30,
+            learner.diagnostics()["last_override"]["manual_position"],
+        )
+        self.assertIsNotNone(learner.diagnostics()["last_save_scheduled_at"])
 
     async def test_reset_clears_all_learning(self) -> None:
         """Clear learned offsets and persist the empty state."""

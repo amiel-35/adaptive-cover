@@ -528,11 +528,15 @@
       "fields": {
         "filename": {
           "name": "Filename",
-          "description": "Name of the diagnostics file to save (e.g. adaptive_cover_diagnostics.json). The file will be saved in the main Home Assistant config directory."
+          "description": "Base diagnostics filename. By default it is prefixed with the current local Home Assistant date."
+        },
+        "include_date": {
+          "name": "Add current date to filename",
+          "description": "Creates a filename in the DD.MM.YYYY_adaptive_cover_diagnostics.json format."
         },
         "refresh": {
           "name": "Refresh before export",
-          "description": "Recalculate coordinator data before saving the diagnostics file."
+          "description": "Recalculate data without moving covers. Enabled by default and limited to 30 seconds."
         }
       }
     }

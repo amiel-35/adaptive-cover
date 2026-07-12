@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any
 
 from homeassistant.core import HomeAssistant
@@ -24,6 +25,11 @@ class BehavioralLearner:
         self.position_biases: dict[str, float] = {}
         self.temperature_offsets: dict[str, float] = {}
         self.override_counts: dict[str, int] = {}
+        self.loaded = False
+        self.last_load_at: datetime | None = None
+        self.last_load_error: str | None = None
+        self.last_override: dict[str, Any] | None = None
+        self.last_save_scheduled_at: datetime | None = None
         self._store = Store(
             hass,
             STORAGE_VERSION,
@@ -35,6 +41,7 @@ class BehavioralLearner:
         try:
             data: dict[str, Any] = await self._store.async_load() or {}
         except (HomeAssistantError, OSError) as err:
+            self.last_load_error = str(err)
             self.logger.error("Unable to load behavioral learning: %s", err)
             return
         try:
@@ -50,7 +57,11 @@ class BehavioralLearner:
                 str(key): int(value)
                 for key, value in data.get("override_counts", {}).items()
             }
-        except (AttributeError, TypeError, ValueError):
+            self.loaded = True
+            self.last_load_at = datetime.now(UTC)
+            self.last_load_error = None
+        except (AttributeError, TypeError, ValueError) as err:
+            self.last_load_error = str(err)
             self.logger.error("Invalid behavioral learning storage; using defaults")
             self.position_biases.clear()
             self.temperature_offsets.clear()
@@ -76,6 +87,15 @@ class BehavioralLearner:
             min(POSITION_BIAS_LIMIT, learned_bias),
         )
         self.override_counts[entity_id] = self.override_counts.get(entity_id, 0) + 1
+        self.last_override = {
+            "timestamp": datetime.now(UTC),
+            "entity_id": entity_id,
+            "calculated_position": our_state,
+            "manual_position": new_position,
+            "position_delta": position_delta,
+            "temperature": current_temp,
+            "is_summer": is_summer,
+        }
 
         if current_temp is not None:
             old_offset = self.temperature_offsets.get(entity_id, 0.0)
@@ -116,14 +136,25 @@ class BehavioralLearner:
             self.override_counts.pop(entity_id, None)
         self._schedule_save()
 
-    def diagnostics(self) -> dict[str, dict]:
-        """Return JSON-safe learning diagnostics."""
+    def _storage_payload(self) -> dict[str, dict]:
+        """Return only values which must survive a restart."""
         return {
             "position_biases": dict(self.position_biases),
             "temperature_offsets": dict(self.temperature_offsets),
             "override_counts": dict(self.override_counts),
         }
 
+    def diagnostics(self) -> dict[str, Any]:
+        """Return JSON-safe learning diagnostics."""
+        return self._storage_payload() | {
+            "storage_loaded": self.loaded,
+            "last_load_at": self.last_load_at,
+            "last_load_error": self.last_load_error,
+            "last_override": self.last_override,
+            "last_save_scheduled_at": self.last_save_scheduled_at,
+        }
+
     def _schedule_save(self) -> None:
         """Coalesce frequent overrides into one storage write."""
-        self._store.async_delay_save(self.diagnostics, 1)
+        self.last_save_scheduled_at = datetime.now(UTC)
+        self._store.async_delay_save(self._storage_payload, 1)

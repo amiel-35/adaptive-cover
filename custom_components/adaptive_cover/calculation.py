@@ -14,6 +14,7 @@ from numpy import radians as rad
 
 from .helpers import get_domain, get_safe_state
 from .decision import (
+    decision_priority,
     is_night_purge_window_active,
     should_hold_thermal_protection,
     wind_speed_to_kmh,
@@ -733,6 +734,31 @@ class ClimateCoverState(NormalCoverState):
     """Compute state for climate control operation."""
 
     climate_data: ClimateCoverData
+    decision_trace: list[dict] = field(default_factory=list, init=False)
+
+    def _trace_rule(self, code: str, active: bool, **details) -> None:
+        """Record one evaluated rule without changing its behavior."""
+        self.decision_trace.append(
+            {
+                "code": code,
+                "priority": decision_priority(code),
+                "active": bool(active),
+                "selected": False,
+                **details,
+            }
+        )
+
+    def _finalize_trace(self) -> None:
+        """Mark the winning rule and explain active lower-priority candidates."""
+        selected_code = self.cover.state_info
+        for item in self.decision_trace:
+            item["selected"] = item["code"] == selected_code
+            if item["selected"]:
+                item["outcome"] = "selected"
+            elif item["active"]:
+                item["outcome"] = "overridden_by_higher_priority"
+            else:
+                item["outcome"] = "inactive"
 
     def normal_type_cover(self) -> int:
         """Determine state for horizontal and vertical covers."""
@@ -914,6 +940,7 @@ class ClimateCoverState(NormalCoverState):
 
     def get_state(self) -> int:  # noqa: C901
         """Return state."""
+        self.decision_trace.clear()
         self.cover.state_info = "auto"
         if not hasattr(self.cover, 'state_reason') or not self.cover.state_reason:
             self.cover.state_reason = "Działanie automatyczne."
@@ -922,21 +949,36 @@ class ClimateCoverState(NormalCoverState):
         result = None
 
         # 1. Ochrona pogodowa
-        if self.climate_data.is_raining:
+        rain_active = self.climate_data.is_raining
+        self._trace_rule(
+            "rain_detected",
+            rain_active,
+            rain_position=self.climate_data.rain_position,
+        )
+        if rain_active:
             self.cover.state_info = "rain_detected"
             result = int(self.climate_data.rain_position)
             self.cover.state_reason = (
                 f"Ochrona pogodowa: wykryto deszcz. Pozycja awaryjna {result}%."
             )
+            self._finalize_trace()
             return result
 
         wind_thresh = getattr(self.climate_data, "wind_threshold", 40)
-        if result is None and self.climate_data.current_wind_speed > wind_thresh:
+        wind_active = self.climate_data.current_wind_speed > wind_thresh
+        self._trace_rule(
+            "wind_detected",
+            wind_active,
+            wind_speed=self.climate_data.current_wind_speed,
+            threshold=wind_thresh,
+        )
+        if result is None and wind_active:
             self.cover.state_info = "wind_detected"
             result = int(self.climate_data.wind_position)
             self.cover.state_reason = (
                 f"Ochrona pogodowa: silny wiatr. Pozycja awaryjna {result}%."
             )
+            self._finalize_trace()
             return result
 
         # 2. Ochrona przed świtem (Dawn Protection)
@@ -945,16 +987,25 @@ class ClimateCoverState(NormalCoverState):
         duration = getattr(self.climate_data, "dawn_duration_min", 60)
         night_purge_active = self._night_purge_conditions_met(now)
 
+        dawn_active = False
         if result is None and m_start <= now.month <= m_end:
             now_utc = dt_util.utcnow()
             sunrise = self.cover.sun_data.sunrise()
             time_to_sunrise = (sunrise - now_utc).total_seconds()
             if 0 < time_to_sunrise < (duration * 60) and not night_purge_active:
+                dawn_active = True
                 self.cover.state_info = "dawn_protection"
                 self.cover.state_reason = "Ochrona przed świtem (blokowanie wczesnego słońca latem)."
                 result = 0
+        self._trace_rule(
+            "dawn_protection",
+            dawn_active,
+            month_window_active=m_start <= now.month <= m_end,
+            night_purge_active=night_purge_active,
+        )
 
         # 2.5 Strict Sun Block
+        strict_sun_active = False
         if (
             result is None
             and not night_purge_active
@@ -975,11 +1026,19 @@ class ClimateCoverState(NormalCoverState):
                             has_sun = True
 
                     if has_sun:
+                        strict_sun_active = True
                         self.cover.state_info = "strict_sun_block"
                         self.cover.state_reason = "Blokada słońca: silne słońce w oknie, rolety zamknięte."
                         result = 0
+        self._trace_rule(
+            "strict_sun_block",
+            strict_sun_active,
+            direct_sun_valid=self.cover.direct_sun_valid,
+            enabled=getattr(self.climate_data, "strict_sun_block_toggle", False),
+        )
 
         # 3. Ochrona przed zimnem i Nocne wietrzenie
+        cold_active = False
         if result is None:
             outside = self.climate_data.outside_temperature
             if outside is not None:
@@ -987,6 +1046,7 @@ class ClimateCoverState(NormalCoverState):
 
                 # --- POPRAWKA: Ochrona przed zimnem działa TYLKO w nocy (po zachodzie słońca) ---
                 if float(outside) < cold_thresh and self.cover.sunset_valid:
+                    cold_active = True
                     self.cover.state_info = "cold_protection"
                     self.cover.state_reason = "Ochrona przed zimnem: jest noc i niska temperatura na zewnątrz."
                     result = 0
@@ -1003,6 +1063,19 @@ class ClimateCoverState(NormalCoverState):
                         "aby schłodzić pokój."
                     )
                     result = int(purge_val)
+        self._trace_rule(
+            "cold_protection",
+            cold_active,
+            outside_temperature=self.climate_data.outside_temperature,
+            threshold=getattr(self.climate_data, "cold_threshold", 16),
+            night=self.cover.sunset_valid,
+        )
+        self._trace_rule(
+            "night_purge",
+            night_purge_active,
+            selected_before_limits=self.cover.state_info == "night_purge",
+            end_time=self.climate_data.night_purge_end_time,
+        )
 
         # 4. Powrót do standardowej logiki (dla trybów dziennych / nocnych jeśli żaden z powyższych)
         if result is None:
@@ -1020,7 +1093,15 @@ class ClimateCoverState(NormalCoverState):
                  self.cover.state_reason = "Tryb nocny: słońce po zachodzie."
             elif not self.cover.valid:
                  self.cover.state_info = "sun_shadow"
-                 if self._thermal_hold_active(now):
+                 thermal_hold_active = self._thermal_hold_active(now)
+                 self._trace_rule(
+                     "thermal_hold",
+                     thermal_hold_active,
+                     last_direct_sun_at=self.climate_data.last_direct_sun_at,
+                     duration_minutes=self.climate_data.thermal_hold_duration,
+                     release_delta=self.climate_data.thermal_hold_release_delta,
+                 )
+                 if thermal_hold_active:
                      self.cover.state_info = "thermal_hold"
                      result = int(self.climate_data.thermal_hold_position)
                      self.cover.state_reason = (
@@ -1035,12 +1116,19 @@ class ClimateCoverState(NormalCoverState):
         if self.cover.apply_max_position and result > self.cover.max_pos:
             self.cover.state_info = "max_limit"
             self.cover.state_reason = f"Ograniczenie przez maksymalną pozycję ({self.cover.max_pos}%)."
+            self._trace_rule("max_limit", True, limit=self.cover.max_pos)
+            self._finalize_trace()
             return self.cover.max_pos
         if self.cover.apply_min_position and result < self.cover.min_pos:
             self.cover.state_info = "min_limit"
             self.cover.state_reason = f"Ograniczenie przez minimalną pozycję ({self.cover.min_pos}%)."
+            self._trace_rule("min_limit", True, limit=self.cover.min_pos)
+            self._finalize_trace()
             return self.cover.min_pos
 
+        if not any(item["code"] == self.cover.state_info for item in self.decision_trace):
+            self._trace_rule(self.cover.state_info, True)
+        self._finalize_trace()
         return result
 
 

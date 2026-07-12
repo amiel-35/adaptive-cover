@@ -3,9 +3,21 @@
 from datetime import datetime, timedelta
 
 import pandas as pd
+from astral import Observer
+from astral.sun import azimuth, elevation, sunrise, sunset
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.sun import get_astral_location
 from homeassistant.util import dt as dt_util
+
+try:
+    from homeassistant.helpers.sun import get_astral_observer
+except ImportError:
+    def get_astral_observer(hass: HomeAssistant) -> Observer:
+        """Build an Astral observer for older Home Assistant releases."""
+        return Observer(
+            latitude=hass.config.latitude,
+            longitude=hass.config.longitude,
+            elevation=hass.config.elevation,
+        )
 
 
 class SunData:
@@ -13,9 +25,7 @@ class SunData:
 
     def __init__(self, timezone, hass: HomeAssistant) -> None:  # noqa: D107
         self.hass = hass
-        location, elevation = get_astral_location(self.hass)
-        self.location = location  # astral.location.Location
-        self.elevation = elevation
+        self.observer = get_astral_observer(self.hass)
         self.timezone = timezone
 
     @property
@@ -32,26 +42,20 @@ class SunData:
     @property
     def solar_azimuth(self) -> list:
         """Create list with solar azimuth data per 5 minutes."""
-        return [
-            self.location.solar_azimuth(moment, self.elevation)
-            for moment in self.times
-        ]
+        return [azimuth(self.observer, moment) for moment in self.times]
 
     @property
     def solar_elevation(self) -> list:
         """Create list with solar elevation data per 5 minutes."""
-        return [
-            self.location.solar_elevation(moment, self.elevation)
-            for moment in self.times
-        ]
+        return [elevation(self.observer, moment) for moment in self.times]
 
     def sunset(self) -> datetime:
         """Fetch sunset time."""
-        return self.location.sunset(dt_util.now().date(), local=False)
+        return sunset(self.observer, dt_util.now().date())
 
     def sunrise(self) -> datetime:
         """Fetch sunrise time."""
-        return self.location.sunrise(dt_util.now().date(), local=False)
+        return sunrise(self.observer, dt_util.now().date())
 
     # def df_today(self)-> pd.DataFrame:
     #     """Create dataframe with azimuth and elevation data"""

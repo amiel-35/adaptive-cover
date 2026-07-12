@@ -4,6 +4,9 @@ from copy import deepcopy
 import logging
 
 DOMAIN = "adaptive_cover"
+INTEGRATION_VERSION = "1.5.0"
+DIAGNOSTICS_SCHEMA_VERSION = 4
+SETTINGS_SCHEMA_VERSION = 4
 LOGGER = logging.getLogger(__package__)
 _LOGGER = logging.getLogger(__name__)
 

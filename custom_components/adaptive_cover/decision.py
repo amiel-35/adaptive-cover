@@ -45,6 +45,19 @@ def decision_priority(code: str) -> int:
     return DECISION_PRIORITIES.get(code, 0)
 
 
+def position_requires_move(
+    current_position: int | float,
+    target_position: int | float,
+    minimum_change: int | float,
+) -> bool:
+    """Return whether the configured position difference requires movement."""
+    threshold = max(0.0, float(minimum_change))
+    difference = abs(float(current_position) - float(target_position))
+    if difference == 0:
+        return False
+    return threshold == 0 or difference >= threshold
+
+
 def is_night_purge_window_active(
     now_local: datetime,
     sunset_local: datetime,

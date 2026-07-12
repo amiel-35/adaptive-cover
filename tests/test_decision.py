@@ -107,6 +107,22 @@ class UnitConversionTests(unittest.TestCase):
         self.assertAlmostEqual(36.0, decision.wind_speed_to_kmh(10.0, "m/s"))
 
 
+class PositionToleranceTests(unittest.TestCase):
+    """Verify movement suppression for devices with imprecise end positions."""
+
+    def test_reported_97_percent_satisfies_100_percent_target(self) -> None:
+        """Do not retry a 100% target below the configured 10% movement delta."""
+        self.assertFalse(decision.position_requires_move(97, 100, 10))
+
+    def test_difference_equal_to_threshold_requires_movement(self) -> None:
+        """Preserve movement when the position difference reaches the threshold."""
+        self.assertTrue(decision.position_requires_move(90, 100, 10))
+
+    def test_exact_position_never_requires_movement(self) -> None:
+        """Avoid redundant calls even when the configured threshold is zero."""
+        self.assertFalse(decision.position_requires_move(100, 100, 0))
+
+
 class DecisionResultTests(unittest.TestCase):
     """Verify explainable decision metadata."""
 

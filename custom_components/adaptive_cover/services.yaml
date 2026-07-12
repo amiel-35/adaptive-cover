@@ -4,11 +4,19 @@ export_config:
   fields:
     filename:
       name: Nazwa pliku
-      description: Nazwa pliku do zapisu, np. adaptive_cover_settings.json. Plik zostanie zapisany w głównym katalogu konfiguracyjnym Home Assistant (/config).
-      required: false
+      description: Bazowa nazwa pliku do zapisu. Przy włączonej dacie wynik będzie miał postać DD.MM.RRRR_adaptive_cover_settings.json.
+      required: true
+      default: adaptive_cover_settings.json
       example: adaptive_cover_settings.json
       selector:
         text:
+    include_date:
+      name: Dodaj bieżącą datę do nazwy
+      description: Dodaje lokalną datę Home Assistant na początku nazwy pliku i zastępuje ewentualny wcześniejszy prefiks daty.
+      required: false
+      default: true
+      selector:
+        boolean:
 
 import_config:
   name: Importuj konfigurację
@@ -17,7 +25,8 @@ import_config:
     filename:
       name: Nazwa pliku
       description: Nazwa pliku z konfiguracją do wczytania, np. adaptive_cover_settings.json. Plik musi znajdować się w głównym katalogu konfiguracyjnym Home Assistant (/config).
-      required: false
+      required: true
+      default: adaptive_cover_settings.json
       example: adaptive_cover_settings.json
       selector:
         text:
@@ -28,14 +37,22 @@ export_diagnostics:
   fields:
     filename:
       name: Nazwa pliku
-      description: Nazwa pliku do zapisu, np. adaptive_cover_diagnostics.json. Plik zostanie zapisany w głównym katalogu konfiguracyjnym Home Assistant (/config).
-      required: false
+      description: Bazowa nazwa pliku do zapisu. Przy włączonej dacie wynik będzie miał postać DD.MM.RRRR_adaptive_cover_diagnostics.json.
+      required: true
+      default: adaptive_cover_diagnostics.json
       example: adaptive_cover_diagnostics.json
       selector:
         text:
+    include_date:
+      name: Dodaj bieżącą datę do nazwy
+      description: Dodaje lokalną datę Home Assistant na początku nazwy pliku i zastępuje ewentualny wcześniejszy prefiks daty.
+      required: false
+      default: true
+      selector:
+        boolean:
     refresh:
       name: Odśwież dane przed eksportem
-      description: Wymusza przeliczenie danych koordynatora przed zapisaniem pliku diagnostycznego.
+      description: Wymusza bezpieczne przeliczenie danych bez wykonywania ruchów rolet. Odświeżenie ma limit 30 sekund.
       required: false
       default: true
       selector:

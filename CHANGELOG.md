@@ -12,6 +12,7 @@ All notable changes to this project will be documented in this file.
 
 ### Zmienione
 - [Zmienione] Podniesiono wersję integracji do `1.5.0`, aby diagnostyka jednoznacznie identyfikowała wdrożenie zawierające schemat v4 i poprawki runtime.
+- [Zmienione] Przepisano `README.md` w kompletnych wersjach PL i EN zgodnie z aktualnym działaniem integracji 1.5.0, jej encjami, usługami, priorytetami, zabezpieczeniami i diagnostyką v4.
 - [Zmienione] Eksport ustawień używa schematu v4 i zapisuje datę, wersję integracji, wersję HA, strefę czasową, wersję wpisu oraz wynik walidacji opcji.
 - [Zmienione] Eksporty domyślnie dodają lokalną datę do nazwy pliku, a pola nazwy i przełączniki daty są aktywne domyślnie w formularzu usługi.
 - [Zmienione] Diagnostyka domyślnie wykonuje ograniczone do 30 sekund odświeżenie read-only, które przelicza aktualny stan bez wysyłania poleceń ruchu, oraz rejestruje jego wynik i czas.

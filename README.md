@@ -1,320 +1,643 @@
-![Version](https://img.shields.io/github/v/release/basbruss/adaptive-cover?style=for-the-badge)
+# Adaptive Cover 1.5.0
 
-![logo](https://github.com/basbruss/adaptive-cover/blob/main/images/logo.png#gh-light-mode-only)
-![logo](https://github.com/basbruss/adaptive-cover/blob/main/images/dark_logo.png#gh-dark-mode-only)
+[Polski](#polski) | [English](#english)
 
-# Adaptive Cover
+Adaptive Cover is a custom Home Assistant integration for automatic control of
+roller shutters, awnings and tilting blinds. It combines solar geometry,
+indoor and outdoor temperature, weather measurements, schedules, open-window
+policies and bounded behavioral learning. Every runtime decision is explainable
+and available in diagnostics schema v4.
 
-This Custom-Integration provides sensors for vertical and horizontal blinds based on the sun's position by calculating the position to filter out direct sunlight.
+> The integration directly controls physical `cover` entities. Test a new
+> configuration with **Dry run** enabled before allowing automatic movement.
 
-This integration builds upon the template sensor from this forum post [Automatic Blinds](https://community.home-assistant.io/t/automatic-blinds-sunscreen-control-based-on-sun-platform/)
+---
 
-- [Adaptive Cover](#adaptive-cover)
-  - [Features](#features)
-  - [Installation](#installation)
-    - [HACS (Recommended)](#hacs-recommended)
-    - [Manual](#manual)
-  - [Setup](#setup)
-  - [Cover Types](#cover-types)
-  - [Modes](#modes)
-    - [Basic mode](#basic-mode)
-    - [Climate mode](#climate-mode)
-      - [Climate strategies](#climate-strategies)
-  - [Variables](#variables)
-    - [Common](#common)
-    - [Vertical](#vertical)
-    - [Horizontal](#horizontal)
-    - [Tilt](#tilt)
-    - [Automation](#automation)
-    - [Climate](#climate)
-    - [Blindspot](#blindspot)
-  - [Entities](#entities)
-  - [Features Planned](#features-planned)
-    - [Simulation](#simulation)
-    - [Blueprint (deprecated since v1.0.0)](#blueprint-deprecated-since-v100)
+# Polski
 
-## Features
+## Najważniejsze możliwości
 
-- Individual service devices for `vertical`, `horizontal` and `tilted` covers
-- Two mode approach with multiple strategies [Modes(`basic`,`climate`)](https://github.com/basbruss/adaptive-cover?tab=readme-ov-file#modes)
-- Binary Sensor to track when the sun is in front of the window
-- Sensors for `start` and `end` time
-- Auto manual override detection
+- Obsługa rolet pionowych, markiz poziomych i żaluzji z uchyłem.
+- Obliczanie pozycji na podstawie azymutu i wysokości słońca oraz geometrii
+  okna lub osłony.
+- Tryb podstawowy oraz tryb klimatyczny uwzględniający temperaturę,
+  nasłonecznienie, pogodę i obecność.
+- Bezpośrednia ochrona przed deszczem, silnym wiatrem, zimnem i słońcem.
+- Nocne przewietrzanie z twardą godziną zakończenia.
+- Podtrzymanie ochrony termicznej tylko po rzeczywistym nasłonecznieniu danego
+  okna.
+- Cztery polityki zachowania po otwarciu okna lub drzwi balkonowych.
+- Automatyczne wykrywanie ręcznego sterowania i czasowe wstrzymanie automatyki.
+- Trwały `BehavioralLearner`, który uczy niewielkich preferencji użytkownika.
+- Ochrona silnika: minimalna zmiana pozycji, minimalny odstęp, cooldown oraz
+  limity ruchów na godzinę i dobę.
+- Weryfikacja osiągnięcia celu, bezpieczne retry i tolerancja niedokładnych
+  pozycji krańcowych, np. `97%` jako osiągnięte `100%`.
+- Eksport i import ustawień oraz rozbudowana diagnostyka v4.
+- Polskie i angielskie tłumaczenia encji, opcji i usług.
 
-- **Climate Mode**
+## Wymagania
 
-  - Weather condition based operation
-  - Presence based operation
-  - Switch to toggle climate mode
-  - Sensor for displaying the operation modus (`winter`,`intermediate`,`summer`)
+- Home Assistant `2023.11.1` lub nowszy.
+- Python `3.11` lub nowszy po stronie Home Assistant.
+- Fizyczna encja `cover` obsługująca ustawianie pozycji albo pozycji uchyłu.
+- Poprawnie skonfigurowana lokalizacja i strefa czasowa Home Assistant.
 
-- **Adaptive Control**
+## Instalacja
 
-  - Turn control on/off
-  - Control multiple covers
-  - Set start time to prevent opening blinds while you are asleep
-  - Set minimum interval time between position changes
-  - set minimum percentage change
+### HACS
+
+1. Dodaj `https://github.com/basbruss/adaptive-cover` jako niestandardowe
+   repozytorium integracji w HACS.
+2. Wyszukaj i zainstaluj **Adaptive Cover**.
+3. Uruchom ponownie Home Assistant.
+4. Przejdź do **Ustawienia -> Urządzenia i usługi -> Dodaj integrację** i
+   wybierz **Adaptive Cover**.
+
+### Ręcznie
+
+1. Skopiuj katalog `custom_components/adaptive_cover` do katalogu
+   `/config/custom_components/adaptive_cover` w Home Assistant.
+2. Upewnij się, że nie istnieje druga kopia, np.
+   `/config/custom_components/adaptive_cover copy`.
+3. Uruchom ponownie Home Assistant i dodaj integrację z interfejsu.
+
+Po aktualizacji plików zawsze wykonaj pełny restart Home Assistant. Samo
+odświeżenie przeglądarki nie przeładowuje kodu Pythona.
+
+## Konfiguracja
+
+Każdy wpis konfiguracji reprezentuje jedną grupę osłon o wspólnej geometrii i
+logice. Jedna fizyczna roleta nie może należeć do kilku wpisów Adaptive Cover.
+Duplikaty są odrzucane podczas konfiguracji, importu i uruchamiania.
+
+### Typy osłon
+
+| Typ | Zastosowanie | Najważniejsze dane |
+| --- | --- | --- |
+| Roleta pionowa | Roleta poruszająca się góra/dół | wysokość okna, wymagany obszar cienia, głębokość okna i parapetu |
+| Markiza pozioma | Markiza wysuwana nad oknem lub tarasem | długość markizy i kąt montażu |
+| Żaluzja z uchyłem | Lamele sterowane kątem | rozstaw, głębokość i zakres obrotu lameli |
+
+### Geometria słońca
+
+- `set_azimuth` określa kierunek, w który skierowane jest okno.
+- `fov_left` i `fov_right` definiują pole widzenia okna.
+- `min_elevation` i `max_elevation` mogą ograniczyć aktywny zakres wysokości
+  słońca.
+- Opcjonalna martwa strefa wyklucza fragment pola widzenia, np. zasłonięty przez
+  sąsiedni budynek.
+- Interpolacja pozwala zdefiniować własne pozycje dla zakresów azymutu.
+- Obliczenia są zabezpieczone przed `NaN`, dzieleniem przez zero i skrajną
+  geometrią.
+
+### Tryby działania
+
+**Tryb podstawowy** używa pozycji słońca, geometrii osłony, zakresu czasu oraz
+pozycji domyślnej i nocnej.
+
+**Tryb klimatyczny** rozszerza obliczenia o:
+
+- temperaturę wewnętrzną i zewnętrzną,
+- progi komfortu `temp_low` i `temp_high`,
+- pogodę i prognozę temperatury,
+- obecność,
+- pomiar lux lub irradiancji z histerezą,
+- ochronę przed zimnem, deszczem i wiatrem,
+- nocne przewietrzanie,
+- ochronę przed świtem,
+- Strict Sun Block,
+- podtrzymanie ochrony termicznej.
+
+## Kolejność decyzji
+
+Reguły mają jawne priorytety. Wyższa reguła nie może zostać zmieniona przez
+niższą decyzję komfortową.
+
+| Priorytet | Reguła | Zachowanie |
+| ---: | --- | --- |
+| 110 | Wyłączone sterowanie | oblicza cel, ale nie wykonuje ruchu |
+| 105 | Otwarte okno | stosuje wybraną politykę bezpieczeństwa |
+| 100 | Deszcz / silny wiatr | ustawia skonfigurowaną pozycję awaryjną |
+| 95 | Ochrona przed zimnem | zamyka osłonę nocą poniżej progu temperatury |
+| 90 | Ochrona przed świtem | ogranicza wczesne światło w wybranych miesiącach |
+| 85 | Strict Sun Block | blokuje bezpośrednie silne słońce w oknie |
+| 80 | Nocne przewietrzanie | uchyla roletę do skonfigurowanej pozycji |
+| 75 | Minimalna / maksymalna pozycja | nakłada fizyczne ograniczenia pozycji |
+| 60 | Thermal Hold | czasowo utrzymuje ochronę po bezpośrednim słońcu |
+| 50 | Tryb nocny | używa pozycji po zachodzie |
+| 40 | Okno w cieniu | wraca do pozycji domyślnej |
+| 10 | Automatyka komfortowa | używa wyniku geometrii i klimatu |
+
+Diagnostyka zawiera `decision_trace`, który pokazuje reguły aktywne, wybraną
+regułę oraz reguły nadpisane wyższym priorytetem.
+
+## Funkcje klimatyczne
+
+### Nocne przewietrzanie
+
+Nocne przewietrzanie działa od zachodu słońca do `night_purge_end_time`, jeżeli
+temperatura wewnętrzna jest wyższa od progu komfortu, a na zewnątrz jest
+chłodniej niż w pomieszczeniu. Po osiągnięciu godziny końcowej integracja
+ponownie oblicza bezpieczny cel zamiast bezwarunkowo zamykać roletę.
+
+Ochrona przed zimnem, deszczem i wiatrem ma wyższy priorytet niż przewietrzanie.
+
+### Podtrzymanie ochrony termicznej
+
+`thermal_hold_after_sun` działa tylko wtedy, gdy konkretne okno było wcześniej
+rzeczywiście wystawione na bezpośrednie słońce. Ochrona zostaje zwolniona:
+
+- po upływie `thermal_hold_duration`,
+- gdy na zewnątrz jest chłodniej od wnętrza co najmniej o
+  `thermal_hold_release_delta`,
+- gdy nie występuje stres termiczny.
+
+### Deszcz i wiatr
+
+- Fizyczny czujnik deszczu ma pierwszeństwo przed opisem prognozy pogody.
+- Prędkość wiatru jest przeliczana do `km/h` z `m/s`, `mph` lub węzłów.
+- Można ustawić osobne pozycje awaryjne dla deszczu i wiatru.
+- Opcja `rain_night_only` ogranicza reakcję na deszcz do pory nocnej.
+
+## Otwarte okno lub drzwi
+
+Obsługiwane polityki `window_open_action`:
+
+| Polityka | Działanie |
+| --- | --- |
+| `pause` | wstrzymuje automatyczne ruchy |
+| `move_to_position` | ustawia `window_open_position` |
+| `block_closing_only` | pozwala otwierać, ale blokuje dalsze zamykanie |
+| `return_after_close` | wstrzymuje automatykę i wraca do celu po zamknięciu okna |
+
+## Ręczne sterowanie
+
+Integracja odróżnia własne polecenia od ruchów użytkownika. Po wykryciu ręcznej
+zmiany dana roleta pozostaje poza automatyką przez wybrany czas. Dostępne czasy
+to: brak, 15, 30, 60, 120, 240 minut albo do zachodu słońca.
+
+`manual_ignore_intermediate` pozwala ignorować przejściowe stany `opening` i
+`closing`. Przycisk resetu ręcznego sterowania przywraca aktualny bezpieczny cel
+i czeka maksymalnie 120 sekund na zakończenie ruchu.
+
+## BehavioralLearner
+
+Uczenie jest zapisywane osobno dla każdego wpisu konfiguracji w Home Assistant
+Store. Po potwierdzonej ręcznej zmianie aktualizuje:
+
+- korektę pozycji ograniczoną do `-25...+25` punktów procentowych,
+- korektę temperatury komfortu ograniczoną do `-3...+3°C`,
+- licznik ręcznych korekt.
+
+Uczenie wpływa wyłącznie na decyzje komfortowe. Nie może zmienić pozycji
+bezpieczeństwa wynikających z deszczu, wiatru, zimna ani Strict Sun Block.
+Przycisk **Reset Behavioral Learning** usuwa wszystkie wyuczone korekty wpisu.
+
+## Ochrona silnika i retry
+
+| Opcja | Domyślnie | Znaczenie |
+| --- | ---: | --- |
+| `delta_position` | `1%` | minimalna różnica pozycji wymagana do ruchu |
+| `delta_time` | `2 min` | minimalny odstęp między automatycznymi zmianami |
+| `global_cooldown` | `5 min` | przerwa po dowolnym poleceniu dla tej samej rolety |
+| `max_moves_per_hour` | `8` | godzinowy limit poleceń; `0` wyłącza limit |
+| `max_moves_per_day` | `40` | dobowy limit poleceń; `0` wyłącza limit |
+
+Polecenia mają numer generacji. Opóźnione retry sprawdza ponownie aktualny cel,
+stan sterowania, ręczne przejęcie, politykę okna i limity. Stare zadanie nie może
+wykonać ruchu po zmianie warunków. Zadania retry działają w tle, nie blokują
+startu Home Assistant i są anulowane podczas wyładowania integracji.
+
+## Najważniejsze wartości domyślne
+
+| Opcja | Wartość |
+| --- | ---: |
+| Pozycja domyślna | `60%` |
+| Pozycja po zachodzie | `0%` |
+| Komfort niski / wysoki | `21°C / 25°C` |
+| Próg zimna | `16°C` |
+| Próg silnego wiatru | `40 km/h` |
+| Nocne przewietrzanie | włączone |
+| Koniec nocnego przewietrzania | `07:00` |
+| Pozycja przewietrzania | `15%` |
+| Thermal Hold | wyłączony |
+| Pozycja Thermal Hold | `30%` |
+| Czas Thermal Hold | `120 min` |
+| Zwolnienie Thermal Hold | `1°C` |
+| Ręczne przejęcie | `15 min` |
+
+## Encje
+
+Każdy wpis tworzy:
+
+- sensor wyliczonej pozycji,
+- sensory początku i końca nasłonecznienia,
+- sensor metody sterowania: `winter`, `intermediate` lub `summer`,
+- sensor statusu algorytmu,
+- sensor tekstowego uzasadnienia decyzji,
+- sensor harmonogramu: `active`, `disabled` lub `outside_schedule`,
+- binary sensor bezpośredniego słońca,
+- binary sensor ręcznego przejęcia,
+- przełącznik automatyki,
+- przełącznik wykrywania ręcznego sterowania,
+- przełącznik Dry Run,
+- wybór czasu ręcznego przejęcia,
+- przycisk resetu ręcznego sterowania,
+- przycisk resetu BehavioralLearner,
+- liczbę przesunięcia zamknięcia względem zachodu,
+- encję czasu otwarcia; przy sensorze Workday osobno dla dni roboczych i wolnych.
+
+W trybie klimatycznym pojawiają się również przełączniki trybu klimatycznego,
+źródła temperatury, lux, irradiancji i Strict Sun Block, zależnie od konfiguracji.
+
+## Usługi
+
+### Eksport ustawień
+
+```yaml
+action: adaptive_cover.export_config
+data:
+  filename: adaptive_cover_settings.json
+  include_date: true
+```
+
+Domyślnie powstaje plik, np.
+`12.07.2026_adaptive_cover_settings.json`, w katalogu `/config`.
+
+### Import ustawień
+
+```yaml
+action: adaptive_cover.import_config
+data:
+  filename: 12.07.2026_adaptive_cover_settings.json
+```
+
+Import jest transakcyjnie walidowany i zachowuje zgodność ze starszym formatem.
+Aktualizuje istniejące wpisy dopasowane po `entry_id` lub tytule. Nie tworzy
+automatycznie brakujących wpisów konfiguracji.
+
+### Eksport diagnostyki
+
+```yaml
+action: adaptive_cover.export_diagnostics
+data:
+  filename: adaptive_cover_diagnostics.json
+  include_date: true
+  refresh: true
+```
+
+Odświeżenie jest domyślnie włączone, działa read-only, nie wysyła poleceń ruchu
+i ma limit 30 sekund.
+
+## Diagnostyka v4
+
+Eksport oraz standardowa diagnostyka Home Assistant używają tego samego
+schematu. Zawierają:
+
+- wersję integracji, Home Assistant i Pythona,
+- strefę czasową i ścieżkę załadowanego komponentu,
+- wersję, stan, źródło i walidację `ConfigEntry`,
+- aktualną decyzję i maksymalnie 50 ostatnich decyzji,
+- ślad priorytetów `decision_trace`,
+- aktualne pozycje, błąd pozycji, tolerancję i `target_satisfied`,
+- ostatnie polecenia, błędy usług i historię ruchów,
+- stan i terminy zadań retry,
+- zdrowie koordynatora i czas odświeżeń,
+- harmonogram, cache prognozy i stan nocnego przewietrzania,
+- stany i świeżość wszystkich powiązanych encji,
+- stan odczytu i zapisu BehavioralLearner.
+
+Historie są ograniczone do 50 wpisów i rozpoczynają się od nowa po restarcie.
+Przed publicznym udostępnieniem diagnostyki sprawdź ścieżki, identyfikatory
+encji i kontekst stanów.
+
+## Rozwiązywanie problemów
+
+1. Sprawdź sensor uzasadnienia decyzji i `target_position`.
+2. Sprawdź `control_toggle`, `manual_override`, `window_open` oraz `dry_run`.
+3. Porównaj `current_position`, `position_error`, `effective_tolerance` i
+   `target_satisfied`.
+4. Sprawdź `last_skip_reason`, `last_service_error` i `verify_tasks`.
+5. Upewnij się, że działa tylko katalog
+   `/config/custom_components/adaptive_cover`.
+6. Wyeksportuj diagnostykę z `refresh: true` i dołącz aktualne logi HA.
+
+`position_delta_too_small` zwykle nie oznacza błędu. Informuje, że różnica jest
+mniejsza od skonfigurowanego progu i kolejne polecenie nie jest potrzebne.
+
+## Rozwój i testy
+
+```powershell
+.\.venv\Scripts\ruff.exe check --no-cache custom_components\adaptive_cover tests
+.\.venv\Scripts\python.exe -m unittest discover -s tests -v
+.\.venv\Scripts\python.exe -m compileall -q custom_components\adaptive_cover tests
+```
+
+Blueprinty w `custom_components/adaptive_cover/blueprints` są rozwiązaniem
+legacy przeznaczonym wyłącznie dla dodatkowych osłon. Nie należy nimi ponownie
+sterować roletami przypisanymi bezpośrednio do integracji.
+
+---
+
+# English
+
+## Key features
+
+- Supports vertical roller shutters, horizontal awnings and tilting blinds.
+- Calculates position from solar azimuth, elevation and cover geometry.
+- Basic mode and climate mode with temperature, irradiance, weather and
+  occupancy inputs.
+- Direct protection against rain, strong wind, cold conditions and sunlight.
+- Night purge with a hard local end time.
+- Thermal protection hold only after actual direct sun on the specific window.
+- Four open-window policies.
+- Automatic manual-override detection and timed return to automation.
+- Persistent bounded `BehavioralLearner` preferences.
+- Motor protection through minimum position delta, minimum interval, cooldown,
+  hourly limits and daily limits.
+- Target verification, safe retries and tolerance for imprecise end positions.
+- Configuration backup/import and explainable diagnostics schema v4.
+- Polish and English translations.
+
+## Requirements
+
+- Home Assistant `2023.11.1` or newer.
+- Python `3.11` or newer on the Home Assistant host.
+- A physical `cover` entity supporting position or tilt-position commands.
+- Correct Home Assistant location and time-zone configuration.
 
 ## Installation
 
-### HACS (Recommended)
+### HACS
 
-Add <https://github.com/basbruss/adaptive-cover> as custom repository to HACS.
-Search and download Adaptive Cover within HACS.
-
-Restart Home-Assistant and add the integration.
+1. Add `https://github.com/basbruss/adaptive-cover` as a custom integration
+   repository in HACS.
+2. Find and install **Adaptive Cover**.
+3. Restart Home Assistant.
+4. Open **Settings -> Devices & services -> Add integration** and choose
+   **Adaptive Cover**.
 
 ### Manual
 
-Download the `adaptive_cover` folder from this github.
-Add the folder to `config/custom_components/`.
+1. Copy `custom_components/adaptive_cover` to
+   `/config/custom_components/adaptive_cover`.
+2. Remove or move duplicate folders such as
+   `/config/custom_components/adaptive_cover copy`.
+3. Restart Home Assistant and add the integration from the UI.
 
-Restart Home-Assistant and add the integration.
+Always perform a full Home Assistant restart after replacing integration files.
 
-## Setup
+## Configuration
 
-Adaptive Cover supports (for now) three types of covers/blinds; `Vertical` and `Horizontal` and `Venetian (Tilted)` blinds.
-Each type has its own specific parameters to setup a sensor. To setup the sensor you first need to find out the azimuth of the window(s). This can be done by finding your location on [Open Street Map Compass](https://osmcompass.com/).
+Each config entry represents one group of covers using the same geometry and
+decision rules. A physical cover may belong to only one Adaptive Cover entry.
+Duplicates are rejected during setup, import and runtime loading.
 
-## Cover Types
+### Cover types
 
-|              | Vertical                      | Horizontal                      | Tilted                          |
-| ------------ | ----------------------------- | ------------------------------- | ------------------------------- |
-|              | ![alt text](images/image.png) | ![alt text](images/image-2.png) | ![alt text](images/image-1.png) |
-| **Movement** | Up/Down                       | In/Out                          | Tilting                         |
-|              | [variables](#vertical)        | [variables](#horizontal)        | [variables](#tilt)              |
+| Type | Use | Main geometry inputs |
+| --- | --- | --- |
+| Vertical cover | Up/down roller shutter | window height, required shaded distance, window depth and sill height |
+| Horizontal awning | Extending awning | awning length and installation angle |
+| Tilt cover | Venetian/slatted blind | slat distance, slat depth and rotation range |
 
-## Modes
+### Solar geometry
 
-This component supports two strategy modes: A `basic` mode and a `climate comfort/energy saving` mode that works with presence and temperature detection.
+- `set_azimuth` defines the window direction.
+- `fov_left` and `fov_right` define the window field of view.
+- Optional minimum and maximum elevation limit active sun angles.
+- A blind spot can exclude a section obstructed by another building.
+- Interpolation can assign custom positions to azimuth ranges.
+- Geometry calculations are guarded against non-finite values, division by zero
+  and extreme angles.
 
-```mermaid
-  graph TD
+### Operating modes
 
-  A[("fa:fa-sun Sundata")]
-  A --> B["Basic Mode"]
-  A --> C["Climate Mode"]
+**Basic mode** uses solar position, geometry, schedule, default position and
+night position.
 
-  subgraph "Basic Mode"
-      B --> BA("Sun within field of view")
+**Climate mode** additionally uses:
 
-      BA --> |No| BC{{Default}}
-      BC --> BE("Time between sunset and sunrise?")
-      BE --> |Yes| BF["Return default"]
-      BE --> |No| BG["Return Sunset default"]
+- indoor and outdoor temperature,
+- `temp_low` and `temp_high` comfort thresholds,
+- weather state and forecast temperature,
+- occupancy,
+- lux or irradiance with hysteresis,
+- cold, rain and wind protection,
+- night purge and dawn protection,
+- Strict Sun Block,
+- post-sun thermal hold.
 
-      BA --> |Yes| BD("Elevation above 0?")
-      BD --> |Yes| BH{{"Calculated Position"}}
-      BD --> |No| BC
-  end
+## Decision priority
 
-  subgraph "Climate Mode"
-      C --> CA("Check Presence")
-  end
+| Priority | Rule | Result |
+| ---: | --- | --- |
+| 110 | Control disabled | calculates the target but does not move the cover |
+| 105 | Window open | applies the selected window policy |
+| 100 | Rain / strong wind | uses the configured emergency position |
+| 95 | Cold protection | closes the cover at night below the threshold |
+| 90 | Dawn protection | limits early sunlight during selected months |
+| 85 | Strict Sun Block | blocks strong direct sunlight in the window |
+| 80 | Night purge | opens the cover to the purge position |
+| 75 | Minimum / maximum position | applies physical position limits |
+| 60 | Thermal Hold | retains shading after recent direct sun |
+| 50 | Night mode | uses the sunset position |
+| 40 | Sun shadow | returns to the default position |
+| 10 | Comfort automation | uses geometry and climate calculations |
 
-  subgraph "Occupants"
-      CA --> |True| CB("Temperature above maximum comfort (summer)?")
+Diagnostics expose a `decision_trace` containing active rules, the selected
+rule and candidates overridden by higher priority.
 
-      CB --> |Yes| CD("Transparent blind?")
-      CB --> |No| CE("Lux/Irradiance below threshold or Weather is not sunny?")
+## Climate functions
 
-      CD --> |Yes| CF["Return fully closed (0%)"]
-      CD --> |No| B
+### Night purge
 
-      CE --> |Yes| CG("Temperature below minimum comfort (winter) and sun infront of window and elevation > 0?")
-      CE --> |No| B
+Night purge operates between sunset and `night_purge_end_time` when the room is
+above its comfort threshold and outdoor air is cooler than the room. At the
+deadline, the integration recalculates the current safe target instead of
+blindly closing the cover. Cold, rain and wind protection remain higher
+priority.
 
-      CG --> |Yes| CH["Return fully open (100%)"]
-      CG --> |No| BC
-  end
+### Thermal Hold
 
-  subgraph "No Occupants"
-      CA --> |False| CC("Sun infront of window and elevation > 0?")
-      CC --> |No| BC
-      CC --> |Yes| CI("Temperature above maximum comfort (summer)?")
-      CI --> |Yes| CF
-      CI --> |No| CJ("Temperature below minimum comfort (winter)")
-      CJ --> |Yes| CH
-      CJ --> |No| BC
-  end
-```
+`thermal_hold_after_sun` can activate only after actual direct sun on that
+specific window. It is released when its configured duration expires, when
+outdoor air is cooler by at least `thermal_hold_release_delta`, or when thermal
+stress is no longer present.
 
-### Basic mode
+### Rain and wind
 
-This mode uses the calculated position when the sun is within the specified azimuth range of the window. Else it defaults to the default value or after sunset value depending on the time of day.
+- A physical rain sensor takes precedence over the weather forecast state.
+- Wind values are normalized from `m/s`, `mph` or knots to `km/h`.
+- Rain and wind can use separate emergency positions.
+- `rain_night_only` limits rain protection to nighttime.
 
-### Climate mode
+## Open-window policies
 
-This mode calculates the position based on extra parameters for presence, indoor temperature, minimal comfort temperature, maximum comfort temperature and weather (optional).
-This mode is split up in two types of strategies; [Presence](https://github.com/basbruss/adaptive-cover?tab=readme-ov-file#presence) and [No Presence](https://github.com/basbruss/adaptive-cover?tab=readme-ov-file#no-presence).
+| Policy | Behavior |
+| --- | --- |
+| `pause` | pauses automatic movement |
+| `move_to_position` | moves to `window_open_position` |
+| `block_closing_only` | permits opening but blocks further closing |
+| `return_after_close` | pauses and returns to the current target after closing |
 
-Post-sun thermal protection is tracked per configured cover. It is available only after direct sun has actually reached that window, expires after the configured hold duration, and is released early when outdoor air is cooler than the room by the configured temperature delta. Global irradiance no longer activates thermal hold for windows that have not been exposed to direct sun.
+## Manual override
 
-Night purge uses a hard local interval from sunset until the configured end time. At the deadline the integration recalculates the current safe target instead of unconditionally forcing every cover to `0%`.
+The integration distinguishes its own service calls from user movement. A
+manually adjusted cover remains outside automation for none, 15, 30, 60, 120
+or 240 minutes, or until sunset. Intermediate `opening` and `closing` states can
+be ignored. The reset button restores the current safe target and waits up to
+120 seconds for completion.
 
-### Behavioral learning
+## BehavioralLearner
 
-Manual changes gradually teach a bounded position bias and comfort-temperature offset for each cover. Learned values are persisted in Home Assistant storage and survive restarts. Safety decisions such as rain, wind, dawn protection and strict sun block are never modified by learning. Use the `Reset Behavioral Learning` button to remove all learned offsets for a config entry.
+Learning data is stored per config entry in Home Assistant Store. A verified
+manual override updates:
 
-#### Climate strategies
+- a position bias limited to `-25...+25` percentage points,
+- a comfort-temperature offset limited to `-3...+3°C`,
+- the override counter.
 
-- **No Presence**:
-  Providing daylight to the room is no objective if there is no presence.
+Learning is applied only to comfort decisions. It cannot alter rain, wind,
+cold-protection or Strict Sun Block targets. **Reset Behavioral Learning**
+clears all learned values for the entry.
 
-  - **Below minimal comfort temperature**:
-    If the sun is above the horizon and the indoor temperature is below the minimal comfort temperature it opens the blind fully or tilt the slats to be parallel with the sun rays to allow for maximum solar radiation to heat up the room.
+## Motor protection and retry
 
-  - **Above maximum comfort temperature**:
-    The objective is to not heat up the room any further by blocking out all possible radiation. All blinds close fully to block out light. <br> <br>
-    If the indoor temperature is between both thresholds the position defaults to the set default value based on the time of day.
+| Option | Default | Purpose |
+| --- | ---: | --- |
+| `delta_position` | `1%` | minimum difference required for movement |
+| `delta_time` | `2 min` | minimum interval between automatic changes |
+| `global_cooldown` | `5 min` | delay after any command for the same cover |
+| `max_moves_per_hour` | `8` | hourly command limit; `0` disables it |
+| `max_moves_per_day` | `40` | daily command limit; `0` disables it |
 
-- **Presence** (or no Presence Entity set):
-  The objective is to reduce glare while providing daylight to the room. All calculation is done by the basic model for Horizontal and Vertical blinds. <br> <br>
-  If you added a weather entity, it will only use the above calculations if the weather state corresponds with the existence of direct sun rays. These states are `sunny`,`windy`, `partlycloudy`, and `cloudy` by default, but you can change the list of states in the weather options. If not equal to these states the position will default to the default value to allow more sunlight entering the room with minimizing the glare due to the weather condition. <br><br>
-  Tilted blinds will only deviate from the above approach if the inside temperature is above the maximum comfort temperature. In that case, the slats will be positioned at 45 degrees as this is [found optimal](https://www.mdpi.com/1996-1073/13/7/1731).
+Commands receive generation numbers. A delayed retry rechecks the current
+target, automation state, manual override, window policy and movement limits.
+Stale tasks cannot move a cover after conditions change. Retry tasks are
+background tasks, do not delay Home Assistant startup and are cancelled on
+integration unload.
 
-## Variables
+## Important defaults
 
-### Common
-
-| Variables                     | Default | Range | Description                                                                                              |
-| ----------------------------- | ------- | ----- | -------------------------------------------------------------------------------------------------------- |
-| Entities                      | []      |       | Denotes entities controllable by the integration                                                         |
-| Window Azimuth                | 180     | 0-359 | The compass direction of the window, discoverable via [Open Street Map Compass](https://osmcompass.com/) |
-| Default Position              | 60      | 0-100 | Initial position of the cover in the absence of sunlight glare detection                                 |
-| Minimal Position              | 100     | 0-99  | Minimal opening position for the cover, suitable for partially closing certain cover types               |
-| Maximum Position              | 100     | 1-100 | Maximum opening position for the cover, suitable for partially opening certain cover types               |
-| Field of view Left            | 90      | 1-90  | Unobstructed viewing angle from window center to the left, in degrees                                    |
-| Field of view Right           | 90      | 1-90  | Unobstructed viewing angle from window center to the right, in degrees                                   |
-| Minimal Elevation             | None    | 0-90  | Minimal elevation degree of the sun to be considered                                                     |
-| Maximum Elevation             | None    | 1-90  | Maximum elevation degree of the sun to be considered                                                     |
-| Default position after Sunset | 0       | 0-100 | Cover's default position from sunset to sunrise                                                          |
-| Offset Sunset time            | 0       |       | Additional minutes before/after sunset                                                                   |
-| Offset Sunrise time           | 0       |       | Additional minutes before/after sunrise                                                                  |
-| Inverse State                 | False   |       | Calculates inverse state for covers fully closed at 100%                                                 |
-
-### Vertical
-
-| Variables         | Default | Range | Description                                                                                 |
-| ----------------- | ------- | ----- | ------------------------------------------------------------------------------------------- |
-| Window Height     | 2.1     | 0.1-6 | Length of fully extended cover/window                                                       |
-| Glare Zone        | 0.5     | 0.1-2 | Objects within this distance of the cover recieve direct sunlight. Measured horizontally from the bottom of the cover when fully extended |
-
-### Horizontal
-
-| Variables                  | Default | Range | Description                                    |
-| -------------------------- | ------- | ----- | ---------------------------------------------- |
-| Awning Height              | 2       | 0.1-6 | Height from work area to awning mounting point |
-| Awning Length (horizontal) | 2.1     | 0.3-6 | Length of the awning when fully extended       |
-| Awning Angle               | 0       | 0-45  | Angle of the awning from the wall              |
-| Glare Zone                 | 0.5     | 0.1-2 | Objects within this distance of the cover recieve direct sunlight |
-
-### Tilt
-
-| Variables     | Default        | Range  | Description                                                |
-| ------------- | -------------- | ------ | ---------------------------------------------------------- |
-| Slat Depth    | 3              | 0.1-15 | Width of each slat                                         |
-| Slat Distance | 2              | 0.1-15 | Vertical distance between two slats in horizontal position |
-| Tilt Mode     | Bi-directional |        |                                                            |
-
-### Automation
-
-| Variables                                  | Default      | Range | Description                                                                                    |
-| ------------------------------------------ | ------------ | ----- | ---------------------------------------------------------------------------------------------- |
-| Minimum Delta Position                     | 1            | 1-90  | Minimum position change required before another change can occur                               |
-| Minimum Delta Time                         | 2            |       | Minimum time gap between position change                                                       |
-| Start Time                                 | `"00:00:00"` |       | Earliest time a cover can be adjusted after midnight                                           |
-| Start Time Entity                          | None         |       | The earliest moment a cover may be changed after midnight. _Overrides the `start_time` value_  |
-| Manual Override Duration                   | `15 min`     |       | Minimum duration for manual control status to remain active                                    |
-| Manual Override reset Timer                | False        |       | Resets duration timer each time the position changes while the manual control status is active |
-| Manual Override Threshold                  | None         | 1-99  | Minimal position change to be recognized as manual change                                      |
-| Manual Override ignore intermediate states | False        |       | Ignore StateChangedEvents that have state `opening` or `closing`                               |
-| End Time                                   | `"00:00:00"` |       | Latest time a cover can be adjusted each day                                                   |
-| End Time Entity                            | None         |       | The latest moment a cover may be changed . _Overrides the `end_time` value_                    |
-| Adjust at end time                         | `False`      |       | Make sure to always update the position to the default setting at the end time.                |
-
-### Climate
-
-| Variables                     | Default | Range | Example                                       | Description                                                                                                                                          |
-| ----------------------------- | ------- | ----- | --------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Indoor Temperature Entity     | `None`  |       | `climate.living_room` \| `sensor.indoor_temp` |                                                                                                                                                      |
-| Minimum Comfort Temperature   | 21      | 0-86  |                                               |                                                                                                                                                      |
-| Maximum Comfort Temperature   | 25      | 0-86  |                                               |                                                                                                                                                      |
-| Outdoor Temperature Entity    | `None`  |       | `sensor.outdoor_temp`                         |                                                                                                                                                      |
-| Outdoor Temperature Threshold | `None`  |       |                                               | If the minimum outside temperature for summer mode is set and the outside temperature falls below this threshold, summer mode will not be activated. |
-| Presence Entity               | `None`  |       |                                               |                                                                                                                                                      |
-| Weather Entity                | `None`  |       | `weather.home`                                | Can also serve as outdoor temperature sensor                                                                                                         |
-| Lux Entity                    | `None`  |       | `sensor.lux`                                  | Returns measured lux                                                                                                                                 |
-| Lux Threshold                 | `1000`  |       |                                               | "In non-summer, above threshold, use optimal position. Otherwise, default position or fully open in winter."                                         |
-| Irradiance Entity             | `None`  |       | `sensor.irradiance`                           | Returns measured irradiance                                                                                                                          |
-| Irradiance Threshold          | `300`   |       |                                               | "In non-summer, above threshold, use optimal position. Otherwise, default position or fully open in winter."                                         |
-| Thermal Hold Duration         | `120`   | 0-720 |                                               | Maximum number of minutes to retain protection after direct sun leaves this specific window.                                                         |
-| Thermal Hold Release Delta    | `1.0`   | 0-10  |                                               | Release protection when outdoor air is cooler than the room by at least this value.                                                                  |
-| Night Purge End Time          | `07:00` |       |                                               | Hard local deadline after which the current safe target is recalculated and applied.                                                                  |
-
-### Blindspot
-
-| Variables            | Default | Range                 | Example | Description                                                                                                          |
-| -------------------- | ------- | --------------------- | ------- | -------------------------------------------------------------------------------------------------------------------- |
-| Blind Spot Left      | None    | 0-max(fov_right, 180) |         | Start point of the blind spot on the predefined field of view, where 0 is equal to the window azimuth - fov left.    |
-| Blind Spot Right     | None    | 1-max(fov_right, 180) |         | End point of the blind spot on the predefined field of view, where 1 is equal to the window azimuth - fov left + 1 . |
-| Blind Spot Elevation | None    | 0-90                  |         | Minimal elevation of the sun for the blindspot area.                                                                 |
+| Option | Value |
+| --- | ---: |
+| Default position | `60%` |
+| Sunset position | `0%` |
+| Low / high comfort temperature | `21°C / 25°C` |
+| Cold threshold | `16°C` |
+| Strong-wind threshold | `40 km/h` |
+| Night purge | enabled |
+| Night purge end | `07:00` |
+| Night purge position | `15%` |
+| Thermal Hold | disabled |
+| Thermal Hold position | `30%` |
+| Thermal Hold duration | `120 min` |
+| Thermal Hold release delta | `1°C` |
+| Manual override duration | `15 min` |
 
 ## Entities
 
-The integration dynamically adds multiple entities based on the used features.
+Every config entry creates:
 
-These entities are always available:
-| Entities | Default | Description |
-| --------------------------------------------- | -------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `sensor.{type}_cover_position_{name}` | | Reflects the current state determined by predefined settings and factors such as sun position, weather, and temperature |
-| `sensor.{type}_control_method_{name}` | `intermediate` | Indicates the active control strategy based on weather conditions. Options include `winter`, `summer`, and `intermediate` |
-| `sensor.{type}_start_sun_{name}` | | Shows the starting time when the sun enters the window's view, with an interval of every 5 minutes. |
-| `sensor.{type}_end_sun_{name}` | | Indicates the ending time when the sun exits the window's view, with an interval of every 5 minutes. |
-| `binary_sensor.{type}_manual_override_{name}` | `off` | Indicates if manual override is engaged for any blinds. |
-| `binary_sensor.{type}_sun_infront_{name}` | `off` | Indicates whether the sun is in front of the window within the designated field of view. |
-| `switch.{type}_toggle_control_{name}` | `on` | Activates the adaptive control feature. When enabled, blinds adjust based on calculated position, unless manually overridden. |
-| `switch.{type}_manual_override_{name}` | `on` | Enables detection of manual overrides. A cover is marked if its position differs from the calculated one, resetting to adaptive control after a set duration. |
-| `button.{type}_reset_manual_override_{name}` | `on` | Resets manual override tags for all covers; if `switch.{type}_toggle_control_{name}` is on, it also restores blinds to their correct positions. |
+- calculated-position sensor,
+- solar start and end sensors,
+- control-method sensor: `winter`, `intermediate` or `summer`,
+- algorithm-status and decision-reason sensors,
+- schedule sensor: `active`, `disabled` or `outside_schedule`,
+- direct-sun and manual-override binary sensors,
+- automation, manual detection and Dry Run switches,
+- manual-override duration select,
+- manual-override reset button,
+- BehavioralLearner reset button,
+- sunset-close offset number,
+- opening-time entity, split into workday/weekend times when configured.
 
-When climate mode is setup you will also get these entities:
+Climate mode may also create climate, temperature-source, lux, irradiance and
+Strict Sun Block switches depending on configured inputs.
 
-| Entities                                   | Default | Description                                                                                                 |
-| ------------------------------------------ | ------- | ----------------------------------------------------------------------------------------------------------- |
-| `switch.{type}_climate_mode_{name}`        | `on`    | Enables climate mode strategy; otherwise, defaults to the standard strategy.                                |
-| `switch.{type}_outside_temperature_{name}` | `on`    | Switches between inside and outside temperatures as the basis for determining the climate control strategy. |
+## Services
 
-![entities](https://github.com/basbruss/adaptive-cover/blob/main/images/entities.png)
+### Export configuration
 
-## Configuration export and diagnostics
+```yaml
+action: adaptive_cover.export_config
+data:
+  filename: adaptive_cover_settings.json
+  include_date: true
+```
 
-The `adaptive_cover.export_config` and `adaptive_cover.export_diagnostics`
-services write schema version 4 JSON files to `/config`. Export filenames are
-prefixed with the current Home Assistant local date by default. Diagnostics
-refresh is enabled by default, limited to 30 seconds, and recalculates data in
-read-only mode without issuing cover movement commands.
+The default result is a file such as
+`12.07.2026_adaptive_cover_settings.json` in `/config`.
 
-Diagnostics include environment and config-entry versions, coordinator health,
-the latest 50 decisions and service commands, evaluated decision rules, retry
-task state, position tolerance, related entity freshness, schedule details and
-BehavioralLearner persistence state.
+### Import configuration
 
-## Features Planned
+```yaml
+action: adaptive_cover.import_config
+data:
+  filename: 12.07.2026_adaptive_cover_settings.json
+```
 
-- Manual override controls
+Import is validated transactionally and remains compatible with older files.
+It updates existing entries matched by `entry_id` or title and does not create
+missing config entries.
 
-  - ~~Time to revert back to adaptive control~~
-  - ~~Reset button~~
-  - Wait until next manual/none adaptive change
+### Export diagnostics
 
-- ~~Algorithm to control radiation and/or illumination~~
+```yaml
+action: adaptive_cover.export_diagnostics
+data:
+  filename: adaptive_cover_diagnostics.json
+  include_date: true
+  refresh: true
+```
 
-### Simulation
+Refresh is enabled by default, read-only, limited to 30 seconds and never issues
+cover movement commands.
 
-![combined_simulation](custom_components/adaptive_cover/simulation/sim_plot.png)
+## Diagnostics schema v4
 
-### Blueprint (deprecated since v1.0.0)
+The service export and native Home Assistant diagnostics share one schema. It
+contains:
 
-This integration provides the option to download a blueprint to control the covers automatically by the provide sensor.
-By selecting the option the blueprints will be added to your local blueprints folder.
+- integration, Home Assistant and Python versions,
+- time zone and loaded component path,
+- config-entry version, state, source and validation,
+- current decision and up to 50 recent decisions,
+- `decision_trace` with evaluated priorities,
+- current position, error, tolerance and `target_satisfied`,
+- recent commands, service errors and movement history,
+- retry task state and deadlines,
+- coordinator health and refresh timing,
+- schedule, forecast cache and night-purge state,
+- freshness of every related Home Assistant entity,
+- BehavioralLearner load, save and override information.
+
+Runtime histories are limited to 50 records and restart with Home Assistant.
+Review paths, entity IDs and state context before sharing diagnostics publicly.
+
+## Troubleshooting
+
+1. Read the decision-reason sensor and `target_position`.
+2. Check `control_toggle`, `manual_override`, `window_open` and `dry_run`.
+3. Compare `current_position`, `position_error`, `effective_tolerance` and
+   `target_satisfied`.
+4. Inspect `last_skip_reason`, `last_service_error` and `verify_tasks`.
+5. Confirm that only `/config/custom_components/adaptive_cover` is installed.
+6. Export diagnostics with `refresh: true` and include current HA logs.
+
+`position_delta_too_small` usually means the target is already satisfied within
+the configured tolerance, not that automation failed.
+
+## Development and validation
+
+```powershell
+.\.venv\Scripts\ruff.exe check --no-cache custom_components\adaptive_cover tests
+.\.venv\Scripts\python.exe -m unittest discover -s tests -v
+.\.venv\Scripts\python.exe -m compileall -q custom_components\adaptive_cover tests
+```
+
+Blueprints under `custom_components/adaptive_cover/blueprints` are legacy tools
+for additional covers only. Do not use them to control covers already assigned
+directly to the integration.

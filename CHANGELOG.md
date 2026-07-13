@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased] - 2026-07-13
+
+### Zmienione
+- [Zmienione] Podniesiono wersję integracji do `1.5.1`, aby wdrożenie poprawki przepływu konfiguracji było jednoznacznie widoczne w Home Assistant i diagnostyce.
+- [Zmienione] Przygotowano fork `Adaptive Cover rako Edition` do dystrybucji przez HACS: zaktualizowano nazwę, właściciela, dokumentację, obsługę zgłoszeń, szablony GitHub i release notes.
+- [Zmienione] Zachowano domenę `adaptive_cover`, aby aktualizacja nie wymagała migracji istniejących wpisów konfiguracji ani encji Home Assistant.
+- [Zmienione] Dokumentacja HACS ostrzega przed równoległą instalacją innego wariantu o tej samej domenie `adaptive_cover`.
+
+### Dodane
+- [Dodane] Dodano zasób marki `brand/icon.png` oraz plik `NOTICE.md` z informacją o pochodzeniu kodu, licencji MIT i utrzymaniu forka przez `@rako79`.
+
+### Usunięte
+- [Usunięte] Usunięto przekierowanie finansowania do poprzedniego maintenera.
+
+### Naprawione
+- [Naprawione] Przepływ opcji korzysta z `config_entry` udostępnianego przez Home Assistant dopiero po inicjalizacji, zgodnie z API HA 2026.7; otwarcie przycisku „Konfiguruj” nie kończy się już błędem 500.
+
 ## [Unreleased] - 2026-07-12
 
 ### Dodane

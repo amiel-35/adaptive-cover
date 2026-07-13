@@ -18,5 +18,6 @@ config/*
 API.ipynb
 .github/.DS_Store
 .DS_Store
+brand/icon-source.png
 notebooks/test_python.ipynb
 /.vs

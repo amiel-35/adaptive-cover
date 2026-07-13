@@ -1,12 +1,18 @@
-# Adaptive Cover 1.5.0
+# Adaptive Cover rako Edition 1.5.1
 
 [Polski](#polski) | [English](#english)
 
-Adaptive Cover is a custom Home Assistant integration for automatic control of
+Adaptive Cover rako Edition is a custom Home Assistant integration for automatic control of
 roller shutters, awnings and tilting blinds. It combines solar geometry,
 indoor and outdoor temperature, weather measurements, schedules, open-window
 policies and bounded behavioral learning. Every runtime decision is explainable
 and available in diagnostics schema v4.
+
+> This is an independently maintained fork of
+> [basbruss/adaptive-cover](https://github.com/basbruss/adaptive-cover). It
+> preserves the MIT license and attribution required for the original project;
+> project maintenance, releases, documentation and issue handling are provided
+> by [@rako79](https://github.com/rako79).
 
 > The integration directly controls physical `cover` entities. Test a new
 > configuration with **Dry run** enabled before allowing automatic movement.
@@ -47,12 +53,16 @@ and available in diagnostics schema v4.
 
 ### HACS
 
-1. Dodaj `https://github.com/basbruss/adaptive-cover` jako niestandardowe
+1. Dodaj `https://github.com/rako79/adaptive-cover` jako niestandardowe
    repozytorium integracji w HACS.
-2. Wyszukaj i zainstaluj **Adaptive Cover**.
+2. Wyszukaj i zainstaluj **Adaptive Cover rako Edition**.
 3. Uruchom ponownie Home Assistant.
 4. Przejdź do **Ustawienia -> Urządzenia i usługi -> Dodaj integrację** i
-   wybierz **Adaptive Cover**.
+   wybierz **Adaptive Cover rako Edition**.
+
+> Ten fork zachowuje domenę `adaptive_cover` dla zgodności z istniejącymi
+> wpisami konfiguracji. Nie instaluj go równolegle z innym wariantem Adaptive
+> Cover; HACS powinien zarządzać jedną kopią tej integracji.
 
 ### Ręcznie
 
@@ -371,12 +381,16 @@ sterować roletami przypisanymi bezpośrednio do integracji.
 
 ### HACS
 
-1. Add `https://github.com/basbruss/adaptive-cover` as a custom integration
+1. Add `https://github.com/rako79/adaptive-cover` as a custom integration
    repository in HACS.
-2. Find and install **Adaptive Cover**.
+2. Find and install **Adaptive Cover rako Edition**.
 3. Restart Home Assistant.
 4. Open **Settings -> Devices & services -> Add integration** and choose
-   **Adaptive Cover**.
+   **Adaptive Cover rako Edition**.
+
+> This fork keeps the `adaptive_cover` domain for compatibility with existing
+> config entries. Do not install it alongside another Adaptive Cover variant;
+> HACS should manage one copy of this integration.
 
 ### Manual
 

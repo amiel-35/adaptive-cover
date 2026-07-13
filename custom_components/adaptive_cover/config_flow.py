@@ -530,9 +530,9 @@ class ConfigFlowHandler(ConfigFlow, domain=DOMAIN):
 
     @staticmethod
     @callback
-    def async_get_options_flow(config_entry):
+    def async_get_options_flow(config_entry: ConfigEntry) -> OptionsFlowHandler:
         """Get the options flow for this handler."""
-        return OptionsFlowHandler(config_entry)
+        return OptionsFlowHandler()
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None):
         """Handle the initial step."""
@@ -832,9 +832,9 @@ class ConfigFlowHandler(ConfigFlow, domain=DOMAIN):
 class OptionsFlowHandler(OptionsFlow):
     """Options to adjust parameters."""
 
-    def __init__(self, config_entry: ConfigEntry) -> None:
-        """Initialize options flow."""
-        self.config_entry = config_entry
+    def _initialize_options(self) -> None:
+        """Load a mutable options snapshot after Home Assistant initializes the flow."""
+        config_entry = self.config_entry
         self.current_config: dict = dict(config_entry.data)
         self.options = normalize_options(config_entry.options)
         self.sensor_type: SensorType = (
@@ -845,6 +845,7 @@ class OptionsFlowHandler(OptionsFlow):
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
         """Manage the options."""
+        self._initialize_options()
         options = ["automation", "blind"]
         if self.options[CONF_CLIMATE_MODE]:
             options.append("climate")

@@ -1,7 +1,7 @@
 {
   "domain": "adaptive_cover",
-  "name": "Adaptive Cover",
-  "codeowners": ["@basbruss"],
+  "name": "Adaptive Cover rako Edition",
+  "codeowners": ["@rako79"],
   "config_flow": true,
   "dependencies": [
     "sun",
@@ -11,9 +11,9 @@
     "sensor",
     "weather"
   ],
-  "documentation": "https://github.com/basbruss/adaptive-cover",
+  "documentation": "https://github.com/rako79/adaptive-cover",
   "iot_class": "calculated",
-  "issue_tracker": "https://github.com/basbruss/adaptive-cover/issues",
+  "issue_tracker": "https://github.com/rako79/adaptive-cover/issues",
   "requirements": ["astral", "numpy", "pandas"],
-  "version": "1.5.0"
+  "version": "1.5.1"
 }

@@ -11,8 +11,12 @@ from numbers import Integral, Real
 import platform as python_platform
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import Platform, __version__ as ha_version
-from homeassistant.core import HomeAssistant, ServiceCall, State
+from homeassistant.const import (
+    EVENT_HOMEASSISTANT_STARTED,
+    Platform,
+    __version__ as ha_version,
+)
+from homeassistant.core import CoreState, HomeAssistant, ServiceCall, State
 from homeassistant.helpers.event import (
     async_track_state_change_event,
 )
@@ -209,10 +213,12 @@ def _cover_diagnostics(
         else None
     )
     manual_until = (
-        manual_since + manager.reset_duration
-        if manual_since is not None and manager is not None
+        getattr(manager, "manual_control_until", {}).get(entity_id)
+        if manager is not None
         else None
     )
+    if manual_until is None and manual_since is not None and manager is not None:
+        manual_until = manual_since + manager.reset_duration
 
     return {
         "entity_id": entity_id,
@@ -336,6 +342,7 @@ def _coordinator_runtime(coordinator: AdaptiveDataUpdateCoordinator | None) -> d
             "last_update_duration_ms": coordinator._last_update_duration_ms,
             "last_update_error": coordinator._last_update_error,
             "first_refresh": coordinator.first_refresh,
+            "runtime_initialized": coordinator._runtime_initialized,
             "state_change_pending": coordinator.state_change,
             "cover_state_change_pending": coordinator.cover_state_change,
             "timed_refresh_pending": coordinator.timed_refresh,
@@ -775,6 +782,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data[DOMAIN][entry.entry_id] = coordinator
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+
+    if hass.state == CoreState.running:
+        coordinator.schedule_runtime_initialization()
+    else:
+        def _runtime_startup_complete(_event) -> None:
+            coordinator.schedule_runtime_initialization()
+
+        entry.async_on_unload(
+            hass.bus.async_listen_once(
+                EVENT_HOMEASSISTANT_STARTED,
+                _runtime_startup_complete,
+            )
+        )
 
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
     return True

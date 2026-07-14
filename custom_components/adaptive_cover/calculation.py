@@ -16,6 +16,7 @@ from .helpers import get_domain, get_safe_state
 from .decision import (
     decision_priority,
     is_night_purge_window_active,
+    numeric_value_above_threshold,
     should_hold_thermal_protection,
     wind_speed_to_kmh,
 )
@@ -1006,6 +1007,9 @@ class ClimateCoverState(NormalCoverState):
 
         # 2.5 Strict Sun Block
         strict_sun_active = False
+        strict_sun_source = None
+        strict_sun_value = None
+        strict_sun_threshold = None
         if (
             result is None
             and not night_purge_active
@@ -1016,12 +1020,44 @@ class ClimateCoverState(NormalCoverState):
                     # Sprawdź, czy faktycznie jest słonecznie i nie pada
                     has_sun = False
 
-                    if getattr(self.climate_data, "irradiance_entity", None):
-                        # irradiance jest True, gdy wartość JEST <= próg (czyli brak słońca)
-                        # Więc jeśli irradiance jest False, to znaczy że słońce przekracza próg W/m2
-                        if not self.climate_data.irradiance and not self.climate_data.is_raining:
-                            has_sun = True
+                    if (
+                        getattr(self.climate_data, "irradiance_entity", None)
+                        and getattr(self.climate_data, "_use_irradiance", False)
+                    ):
+                        strict_sun_source = "irradiance"
+                        strict_sun_value = get_safe_state(
+                            self.climate_data.hass,
+                            self.climate_data.irradiance_entity,
+                        )
+                        strict_sun_threshold = (
+                            self.climate_data.irradiance_threshold_on
+                            if self.climate_data.irradiance_threshold_on is not None
+                            else self.climate_data.irradiance_threshold
+                        )
+                        has_sun = numeric_value_above_threshold(
+                            strict_sun_value,
+                            strict_sun_threshold,
+                        ) and not self.climate_data.is_raining
+                    elif (
+                        getattr(self.climate_data, "lux_entity", None)
+                        and getattr(self.climate_data, "_use_lux", False)
+                    ):
+                        strict_sun_source = "lux"
+                        strict_sun_value = get_safe_state(
+                            self.climate_data.hass,
+                            self.climate_data.lux_entity,
+                        )
+                        strict_sun_threshold = (
+                            self.climate_data.lux_threshold_on
+                            if self.climate_data.lux_threshold_on is not None
+                            else self.climate_data.lux_threshold
+                        )
+                        has_sun = numeric_value_above_threshold(
+                            strict_sun_value,
+                            strict_sun_threshold,
+                        ) and not self.climate_data.is_raining
                     else:
+                        strict_sun_source = "weather"
                         if self.climate_data.is_sunny and not self.climate_data.is_raining:
                             has_sun = True
 
@@ -1035,6 +1071,14 @@ class ClimateCoverState(NormalCoverState):
             strict_sun_active,
             direct_sun_valid=self.cover.direct_sun_valid,
             enabled=getattr(self.climate_data, "strict_sun_block_toggle", False),
+            source=strict_sun_source,
+            sensor_value=strict_sun_value,
+            threshold=strict_sun_threshold,
+            sensor_available=(
+                strict_sun_value not in {None, "unknown", "unavailable"}
+                if strict_sun_source in {"irradiance", "lux"}
+                else None
+            ),
         )
 
         # 3. Ochrona przed zimnem i Nocne wietrzenie

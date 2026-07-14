@@ -176,18 +176,14 @@ class AdaptiveCoverSwitch(
         self.coordinator.logger.debug("Turning on")
         self._attr_is_on = True
         setattr(self.coordinator, self._key, True)
+        await self.coordinator.async_refresh()
         if self._key == "control_toggle" and kwargs.get("added") is not True:
             for entity in self.coordinator.entities:
-                if (
-                    not self.coordinator.manager.is_cover_manual(entity)
-                    and self.coordinator.adaptive_movement_allowed
-                ):
-                    await self.coordinator.async_handle_call_service(
-                        entity,
-                        self.coordinator.state,
-                        self.coordinator._active_options,
-                    )
-        await self.coordinator.async_refresh()
+                await self.coordinator.async_handle_call_service(
+                    entity,
+                    self.coordinator.state,
+                    self.coordinator._active_options,
+                )
         self.schedule_update_ha_state()
 
     async def async_turn_off(self, **kwargs: Any) -> None:

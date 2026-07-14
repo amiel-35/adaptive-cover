@@ -39,6 +39,18 @@ DECISION_PRIORITIES = {
     "auto": 10,
 }
 
+LEARNABLE_DECISION_CODES = frozenset({"auto", "thermal_hold", "sun_shadow"})
+SCHEDULE_EXEMPT_DECISION_CODES = frozenset(
+    {
+        "rain_detected",
+        "wind_detected",
+        "cold_protection",
+        "dawn_protection",
+        "strict_sun_block",
+    }
+)
+EMERGENCY_DECISION_CODES = frozenset({"rain_detected", "wind_detected"})
+
 
 def decision_priority(code: str) -> int:
     """Return a stable priority for a decision code."""
@@ -58,6 +70,19 @@ def position_requires_move(
     return threshold == 0 or difference >= threshold
 
 
+def numeric_value_above_threshold(
+    value: Any,
+    threshold: int | float | None,
+) -> bool:
+    """Return a strong-signal result only for a valid numeric sensor reading."""
+    if value is None or threshold is None:
+        return False
+    try:
+        return float(value) > float(threshold)
+    except (TypeError, ValueError):
+        return False
+
+
 def is_night_purge_window_active(
     now_local: datetime,
     sunset_local: datetime,
@@ -74,16 +99,23 @@ def is_night_purge_window_active(
         purge_end,
         tzinfo=now_local.tzinfo,
     )
-    if now_local >= sunset_today:
+    if now_local < sunset_today:
+        # Poranny fragment należy do nocy rozpoczętej poprzedniego dnia.
+        return purge_end < time(12) and now_local < end_today
+
+    if purge_end > sunset_today.time():
         end_date = now_local.date()
-        if purge_end <= sunset_today.time():
-            end_date += timedelta(days=1)
-        return now_local < datetime.combine(
-            end_date,
-            purge_end,
-            tzinfo=now_local.tzinfo,
-        )
-    return now_local < end_today
+    elif purge_end < time(12):
+        end_date = now_local.date() + timedelta(days=1)
+    else:
+        # Niejednoznaczna godzina dzienna wcześniejsza od zachodu nie tworzy
+        # całodziennego okna przewietrzania.
+        return False
+    return now_local < datetime.combine(
+        end_date,
+        purge_end,
+        tzinfo=now_local.tzinfo,
+    )
 
 
 def should_hold_thermal_protection(

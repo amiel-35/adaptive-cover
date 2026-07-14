@@ -1,4 +1,4 @@
-# Adaptive Cover rako Edition 1.5.1
+# Adaptive Cover rako Edition 1.5.4
 
 [Polski](#polski) | [English](#english)
 
@@ -148,8 +148,10 @@ regułę oraz reguły nadpisane wyższym priorytetem.
 
 Nocne przewietrzanie działa od zachodu słońca do `night_purge_end_time`, jeżeli
 temperatura wewnętrzna jest wyższa od progu komfortu, a na zewnątrz jest
-chłodniej niż w pomieszczeniu. Po osiągnięciu godziny końcowej integracja
-ponownie oblicza bezpieczny cel zamiast bezwarunkowo zamykać roletę.
+chłodniej niż w pomieszczeniu. Po osiągnięciu godziny końcowej integracja ustawia
+skonfigurowaną pozycję nocną. Restart lub przeładowanie wykonane po terminie, ale
+przed rozpoczęciem harmonogramu dziennego, powoduje natychmiastowe nadrobienie
+pominiętego zamknięcia.
 
 Ochrona przed zimnem, deszczem i wiatrem ma wyższy priorytet niż przewietrzanie.
 
@@ -169,6 +171,13 @@ rzeczywiście wystawione na bezpośrednie słońce. Ochrona zostaje zwolniona:
 - Prędkość wiatru jest przeliczana do `km/h` z `m/s`, `mph` lub węzłów.
 - Można ustawić osobne pozycje awaryjne dla deszczu i wiatru.
 - Opcja `rain_night_only` ogranicza reakcję na deszcz do pory nocnej.
+- Deszcz i wiatr omijają harmonogram, ręczne przejęcie, cooldown oraz limity
+  ruchów. Polityka otwartego okna nadal ma najwyższy priorytet.
+
+Strict Sun Block wymaga aktualnego numerycznego odczytu irradiancji lub lux
+większego od progu włączenia. Stan `unknown`, `unavailable` albo brak odczytu nie
+jest traktowany jako silne słońce. Podczas uruchamiania Home Assistant integracja
+czeka na stabilizację encji i dopiero potem może wysłać pierwsze polecenie.
 
 ## Otwarte okno lub drzwi
 
@@ -191,6 +200,10 @@ to: brak, 15, 30, 60, 120, 240 minut albo do zachodu słońca.
 `closing`. Przycisk resetu ręcznego sterowania przywraca aktualny bezpieczny cel
 i czeka maksymalnie 120 sekund na zakończenie ruchu.
 
+Termin przejęcia jest zapisywany jako stała chwila. Wariant „do zachodu słońca”
+nie skraca się podczas kolejnych odświeżeń i po zachodzie wskazuje następny
+zachód.
+
 ## BehavioralLearner
 
 Uczenie jest zapisywane osobno dla każdego wpisu konfiguracji w Home Assistant
@@ -203,6 +216,19 @@ Store. Po potwierdzonej ręcznej zmianie aktualizuje:
 Uczenie wpływa wyłącznie na decyzje komfortowe. Nie może zmienić pozycji
 bezpieczeństwa wynikających z deszczu, wiatru, zimna ani Strict Sun Block.
 Przycisk **Reset Behavioral Learning** usuwa wszystkie wyuczone korekty wpisu.
+Znacznik ostatniego bezpośredniego słońca jest zapisywany oddzielnie i przetrwa
+restart Home Assistant, dzięki czemu Thermal Hold nie traci kontekstu.
+
+## Harmonogram i źródła czasu
+
+Godzina rozpoczęcia ma kolejność: encja startu, godzina dnia roboczego/wolnego
+przy skonfigurowanej encji Workday, a następnie uniwersalne `start_time`.
+Niedostępna encja Workday nie jest uznawana za dzień wolny.
+
+Godzina zakończenia ma kolejność: encja końca, jawne `end_time`, a dopiero potem
+zachód słońca z `close_sunset_offset`. Encja przesunięcia zachodu jest tworzona
+tylko dla zamknięcia solarnego. Zmiana terminu na wcześniejszy oraz termin
+pominięty podczas restartu są obsługiwane przy najbliższym odświeżeniu.
 
 ## Ochrona silnika i retry
 
@@ -469,8 +495,9 @@ rule and candidates overridden by higher priority.
 
 Night purge operates between sunset and `night_purge_end_time` when the room is
 above its comfort threshold and outdoor air is cooler than the room. At the
-deadline, the integration recalculates the current safe target instead of
-blindly closing the cover. Cold, rain and wind protection remain higher
+deadline, the integration applies the configured night position. A restart or
+reload after the deadline but before the daily schedule starts immediately
+catches up the missed close. Cold, rain and wind protection remain higher
 priority.
 
 ### Thermal Hold
@@ -486,6 +513,13 @@ stress is no longer present.
 - Wind values are normalized from `m/s`, `mph` or knots to `km/h`.
 - Rain and wind can use separate emergency positions.
 - `rain_night_only` limits rain protection to nighttime.
+- Rain and wind bypass the schedule, manual override, cooldown and movement
+  limits. The open-window policy still has the highest priority.
+
+Strict Sun Block requires a current numeric irradiance or lux reading above its
+activation threshold. `unknown`, `unavailable` and missing readings are not
+treated as strong sunlight. During Home Assistant startup, the integration waits
+for entities to settle before it can send its first command.
 
 ## Open-window policies
 
@@ -504,6 +538,10 @@ or 240 minutes, or until sunset. Intermediate `opening` and `closing` states can
 be ignored. The reset button restores the current safe target and waits up to
 120 seconds for completion.
 
+The override deadline is stored as one fixed timestamp. The “until sunset”
+variant does not shrink on each refresh and selects the next sunset when the
+current day's sunset has already passed.
+
 ## BehavioralLearner
 
 Learning data is stored per config entry in Home Assistant Store. A verified
@@ -516,6 +554,19 @@ manual override updates:
 Learning is applied only to comfort decisions. It cannot alter rain, wind,
 cold-protection or Strict Sun Block targets. **Reset Behavioral Learning**
 clears all learned values for the entry.
+The last direct-sun timestamp is persisted separately across Home Assistant
+restarts, preserving Thermal Hold context.
+
+## Schedule and time-source precedence
+
+Start-time precedence is: configured start entity, workday/weekend time when a
+Workday entity is configured, then universal `start_time`. An unavailable
+Workday entity is not silently treated as a weekend.
+
+End-time precedence is: configured end entity, explicit `end_time`, then sunset
+plus `close_sunset_offset`. The sunset-offset number entity is exposed only for
+solar closing. Earlier schedule changes and deadlines missed during a restart
+are handled on the next refresh.
 
 ## Motor protection and retry
 

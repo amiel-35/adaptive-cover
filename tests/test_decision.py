@@ -47,6 +47,22 @@ class NightPurgeTests(unittest.TestCase):
             decision.is_night_purge_window_active(now, sunset, time(6, 0))
         )
 
+    def test_daytime_deadline_before_sunset_does_not_activate_all_day(self) -> None:
+        """Treat a deadline such as 18:00 as inactive before a later sunset."""
+        now = datetime(2026, 7, 11, 12, 0, tzinfo=UTC)
+        sunset = datetime(2026, 7, 11, 20, 0, tzinfo=UTC)
+        self.assertFalse(
+            decision.is_night_purge_window_active(now, sunset, time(18, 0))
+        )
+
+    def test_same_evening_deadline_after_sunset_is_supported(self) -> None:
+        """Allow a valid same-evening deadline later than sunset."""
+        now = datetime(2026, 12, 1, 21, 0, tzinfo=UTC)
+        sunset = datetime(2026, 12, 1, 16, 0, tzinfo=UTC)
+        self.assertTrue(
+            decision.is_night_purge_window_active(now, sunset, time(22, 0))
+        )
+
 
 class ThermalHoldTests(unittest.TestCase):
     """Verify room-specific post-sun protection."""
@@ -123,6 +139,22 @@ class PositionToleranceTests(unittest.TestCase):
         self.assertFalse(decision.position_requires_move(100, 100, 0))
 
 
+class NumericSignalTests(unittest.TestCase):
+    """Verify that missing sensor data never becomes a strong-sun signal."""
+
+    def test_missing_irradiance_is_not_strong_sun(self) -> None:
+        """Treat startup null values as unavailable, not above threshold."""
+        self.assertFalse(decision.numeric_value_above_threshold(None, 300))
+        self.assertFalse(
+            decision.numeric_value_above_threshold("unavailable", 300)
+        )
+
+    def test_irradiance_must_exceed_threshold(self) -> None:
+        """Use the actual numeric reading for Strict Sun Block."""
+        self.assertFalse(decision.numeric_value_above_threshold(145.78, 300))
+        self.assertTrue(decision.numeric_value_above_threshold(413, 300))
+
+
 class DecisionResultTests(unittest.TestCase):
     """Verify explainable decision metadata."""
 
@@ -143,6 +175,12 @@ class DecisionResultTests(unittest.TestCase):
             inputs={"irradiance": 413.0},
         )
         self.assertEqual(413.0, result.as_dict()["inputs"]["irradiance"])
+
+    def test_only_comfort_decisions_are_learnable(self) -> None:
+        """Do not learn user preferences from rain or wind safety targets."""
+        self.assertIn("thermal_hold", decision.LEARNABLE_DECISION_CODES)
+        self.assertNotIn("rain_detected", decision.LEARNABLE_DECISION_CODES)
+        self.assertIn("rain_detected", decision.EMERGENCY_DECISION_CODES)
 
 
 if __name__ == "__main__":

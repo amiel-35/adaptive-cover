@@ -1,5 +1,6 @@
 """Tests for persistent BehavioralLearner calculations."""
 
+from datetime import UTC, datetime, timedelta
 import importlib.util
 from pathlib import Path
 import sys
@@ -62,12 +63,17 @@ class BehavioralLearnerTests(unittest.IsolatedAsyncioTestCase):
             "position_biases": {"cover.room": 4.5},
             "temperature_offsets": {"cover.room": -0.3},
             "override_counts": {"cover.room": 3},
+            "last_direct_sun_at": "2026-07-14T10:15:00+00:00",
         }
         await learner.async_load()
         self.assertEqual(34, learner.get_adjusted_position("cover.room", 30))
         self.assertEqual(-0.3, learner.get_temp_offset("cover.room"))
         self.assertTrue(learner.diagnostics()["storage_loaded"])
         self.assertIsNotNone(learner.diagnostics()["last_load_at"])
+        self.assertEqual(
+            datetime(2026, 7, 14, 10, 15, tzinfo=UTC),
+            learner.last_direct_sun_at,
+        )
 
     async def test_override_updates_and_schedules_persistence(self) -> None:
         """Learn bounded position and temperature preferences."""
@@ -89,6 +95,21 @@ class BehavioralLearnerTests(unittest.IsolatedAsyncioTestCase):
         learner.reset()
         self.assertEqual(50, learner.get_adjusted_position("cover.room", 50))
         self.assertEqual({}, learner._store.delayed_payload["position_biases"])
+
+    async def test_direct_sun_is_persisted_without_excessive_writes(self) -> None:
+        """Retain thermal context and throttle repeated storage updates."""
+        learner = learning.BehavioralLearner(object(), Mock(), "entry")
+        first = datetime(2026, 7, 14, 10, 0, tzinfo=UTC)
+        learner.remember_direct_sun(first)
+        first_payload = learner._store.delayed_payload
+        learner._store.delayed_payload = None
+        learner.remember_direct_sun(first + timedelta(minutes=5))
+        self.assertIsNone(learner._store.delayed_payload)
+        learner.remember_direct_sun(first + timedelta(minutes=5), force=True)
+        self.assertIsNotNone(learner._store.delayed_payload)
+        self.assertEqual(
+            first.isoformat(), first_payload["last_direct_sun_at"]
+        )
 
 
 if __name__ == "__main__":

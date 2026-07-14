@@ -2,6 +2,34 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased] - 2026-07-14
+
+### Zmienione
+- [Zmienione] Podniesiono wersję integracji do `1.5.4` po analizie rzeczywistej sekwencji rozruchowej Home Assistant 2026.7.
+- [Zmienione] Ujednolicono priorytety wykonania: deszcz i wiatr omijają harmonogram, ręczne przejęcie, cooldown i limity ruchów, a pozostałe zabezpieczenia omijają harmonogram z zachowaniem ochrony silnika.
+- [Zmienione] Uporządkowano pierwszeństwo źródeł czasu; `start_time` działa bez encji Workday, a `close_sunset_offset` jest dostępny tylko przy zamknięciu solarnym.
+
+### Dodane
+- [Dodane] BehavioralLearner zapisuje ostatni czas bezpośredniego nasłonecznienia z ograniczeniem częstotliwości zapisu, dzięki czemu Thermal Hold zachowuje kontekst po restarcie.
+- [Dodane] Rozszerzono testy regresyjne o priorytety bezpieczeństwa, pominięte terminy, stany pośrednie silnika, trwałość uczenia, walidację czasu oraz interpolacji.
+
+### Naprawione
+- [Naprawione] Zakończenie nocnego wietrzenia wykonuje teraz rzeczywiste zamknięcie rolety do skonfigurowanej pozycji nocnej, niezależnie od późniejszego startu dziennego harmonogramu, z zachowaniem ochrony otwartego okna i aktywnego sterowania ręcznego.
+- [Naprawione] Restart między końcem nocnego wietrzenia a startem dziennego harmonogramu nadrabia pominięte zamknięcie zamiast pozostawiać roletę w pozycji przewietrzania.
+- [Naprawione] Pierwsze sterowanie odbywa się dopiero po odtworzeniu przełączników `RestoreEntity`, więc automatyka nie czeka na kolejne zdarzenie czujnika po uruchomieniu Home Assistant.
+- [Naprawione] Ręczne włączenie automatyki najpierw przelicza aktualny cel i korzysta ze wspólnej ścieżki priorytetów zamiast blokować decyzje bezpieczeństwa własnym sprawdzeniem harmonogramu.
+- [Naprawione] Wcześniejsza zmiana godziny końca oraz termin pominięty podczas restartu są wykonywane, zamiast pozostawać za starym zaplanowanym callbackiem.
+- [Naprawione] `manual_ignore_intermediate` zatrzymuje obsługę stanów `opening` i `closing` przed uruchomieniem detekcji ręcznego sterowania.
+- [Naprawione] Ręczne przejęcie używa stałego terminu końcowego; wariant „do zachodu słońca” nie kończy się w połowie pozostałego czasu.
+- [Naprawione] BehavioralLearner nie uczy się z ręcznych zmian powstałych przy aktywnych decyzjach bezpieczeństwa.
+- [Naprawione] Zmiana encji pogody nie zwraca prognozy zapamiętanej dla poprzedniej encji, gdy nowe źródło jest niedostępne.
+- [Naprawione] Niejednoznaczna dzienna godzina końca nocnego przewietrzania nie aktywuje przewietrzania przez cały dzień.
+- [Naprawione] Interpolacja obsługuje wartość początkową `0`, odrzuca powtarzające się punkty oraz wartości poza zakresem `0...100`.
+- [Naprawione] Niedostępna encja Workday zachowuje bezpieczne założenie dnia roboczego zamiast przełączać harmonogram na weekendowy.
+- [Naprawione] Strict Sun Block nie interpretuje już `null`, `unknown` ani `unavailable` z czujnika irradiancji/lux jako silnego słońca; wymaga aktualnego odczytu większego od progu włączenia.
+- [Naprawione] Zdarzenia czujników i przejściowe stany przełączników podczas fazy `STARTING` mogą aktualizować obliczenia, ale nie wysyłają poleceń do rolet. Pierwszy ruch następuje dopiero po zdarzeniu pełnego uruchomienia HA i krótkiej stabilizacji encji.
+- [Naprawione] Diagnostyka pokazuje stan `runtime_initialized` oraz źródło, wartość, próg i dostępność sygnału Strict Sun Block, co pozwala odróżnić prawdziwe silne słońce od brakującego odczytu.
+
 ## [Unreleased] - 2026-07-13
 
 ### Zmienione
@@ -12,9 +40,11 @@ All notable changes to this project will be documented in this file.
 
 ### Dodane
 - [Dodane] Dodano zasób marki `brand/icon.png` oraz plik `NOTICE.md` z informacją o pochodzeniu kodu, licencji MIT i utrzymaniu forka przez `@rako79`.
+- [Dodane] Dodano `PLAN_ROZWOJU.md` z priorytetami przyszłych zmian: strefy olśnienia, panel Lovelace, bezpieczne tryby tymczasowe i arbiter sezonowy.
 
 ### Usunięte
 - [Usunięte] Usunięto przekierowanie finansowania do poprzedniego maintenera.
+- [Usunięte] Usunięto z planu rozwoju obsługę dwuosiowych żaluzji.
 
 ### Naprawione
 - [Naprawione] Przepływ opcji korzysta z `config_entry` udostępnianego przez Home Assistant dopiero po inicjalizacji, zgodnie z API HA 2026.7; otwarcie przycisku „Konfiguruj” nie kończy się już błędem 500.

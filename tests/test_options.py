@@ -55,6 +55,37 @@ class OptionValidationTests(unittest.TestCase):
             ),
         )
 
+    def test_invalid_night_purge_time_is_rejected(self) -> None:
+        """Reject malformed deadlines before runtime scheduling."""
+        errors = const.validate_options(
+            {const.CONF_NIGHT_PURGE_END_TIME: "25:61"}
+        )
+        self.assertIn("night_purge_end_time_must_be_valid", errors)
+
+    def test_interpolation_source_must_be_strictly_increasing(self) -> None:
+        """Reject duplicate source points unsupported by interpolation."""
+        errors = const.validate_options(
+            {
+                const.CONF_INTERP: True,
+                const.CONF_INTERP_LIST: [0, 50, 50, 100],
+                const.CONF_INTERP_LIST_NEW: [0, 25, 75, 100],
+            }
+        )
+        self.assertIn(
+            "interpolation_source_must_be_strictly_increasing", errors
+        )
+
+    def test_interpolation_values_must_stay_in_cover_range(self) -> None:
+        """Reject target positions outside the cover service range."""
+        errors = const.validate_options(
+            {
+                const.CONF_INTERP: True,
+                const.CONF_INTERP_LIST: [0, 100],
+                const.CONF_INTERP_LIST_NEW: [-1, 101],
+            }
+        )
+        self.assertIn("interpolation_values_must_be_between_0_and_100", errors)
+
 
 if __name__ == "__main__":
     unittest.main()

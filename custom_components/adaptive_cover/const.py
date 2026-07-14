@@ -1,10 +1,11 @@
 """Constants for the Adaptive Cover integration."""
 
 from copy import deepcopy
+from datetime import time
 import logging
 
 DOMAIN = "adaptive_cover"
-INTEGRATION_VERSION = "1.5.1"
+INTEGRATION_VERSION = "1.5.4"
 DIAGNOSTICS_SCHEMA_VERSION = 4
 SETTINGS_SCHEMA_VERSION = 4
 LOGGER = logging.getLogger(__package__)
@@ -276,6 +277,11 @@ def validate_options(options: dict | None) -> list[str]:
     if min_position is not None and max_position is not None and min_position > max_position:
         errors.append("min_position_must_not_exceed_max_position")
 
+    try:
+        time.fromisoformat(values[CONF_NIGHT_PURGE_END_TIME])
+    except (TypeError, ValueError):
+        errors.append("night_purge_end_time_must_be_valid")
+
     source = values[CONF_INTERP_LIST] or []
     target = values[CONF_INTERP_LIST_NEW] or []
     if values[CONF_INTERP] and len(source) != len(target):
@@ -283,8 +289,14 @@ def validate_options(options: dict | None) -> list[str]:
     try:
         source_values = list(map(int, source))
         list(map(int, target))
-        if source_values and sorted(source_values) != source_values:
-            errors.append("interpolation_source_must_be_sorted")
+        target_values = list(map(int, target))
+        if source_values and any(
+            current >= following
+            for current, following in zip(source_values, source_values[1:])
+        ):
+            errors.append("interpolation_source_must_be_strictly_increasing")
+        if any(value < 0 or value > 100 for value in source_values + target_values):
+            errors.append("interpolation_values_must_be_between_0_and_100")
     except (TypeError, ValueError):
         errors.append("interpolation_values_must_be_integers")
 

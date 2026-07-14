@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from homeassistant.core import HomeAssistant
@@ -30,6 +30,8 @@ class BehavioralLearner:
         self.last_load_error: str | None = None
         self.last_override: dict[str, Any] | None = None
         self.last_save_scheduled_at: datetime | None = None
+        self.last_direct_sun_at: datetime | None = None
+        self._last_direct_sun_saved_at: datetime | None = None
         self._store = Store(
             hass,
             STORAGE_VERSION,
@@ -57,6 +59,13 @@ class BehavioralLearner:
                 str(key): int(value)
                 for key, value in data.get("override_counts", {}).items()
             }
+            stored_sun = data.get("last_direct_sun_at")
+            self.last_direct_sun_at = (
+                datetime.fromisoformat(stored_sun) if stored_sun else None
+            )
+            if self.last_direct_sun_at and self.last_direct_sun_at.tzinfo is None:
+                self.last_direct_sun_at = self.last_direct_sun_at.replace(tzinfo=UTC)
+            self._last_direct_sun_saved_at = self.last_direct_sun_at
             self.loaded = True
             self.last_load_at = datetime.now(UTC)
             self.last_load_error = None
@@ -66,6 +75,22 @@ class BehavioralLearner:
             self.position_biases.clear()
             self.temperature_offsets.clear()
             self.override_counts.clear()
+            self.last_direct_sun_at = None
+            self._last_direct_sun_saved_at = None
+
+    def remember_direct_sun(self, timestamp: datetime, *, force: bool = False) -> None:
+        """Persist recent direct-sun activity with bounded write frequency."""
+        if timestamp.tzinfo is None:
+            raise ValueError("Direct-sun timestamp must be timezone-aware")
+        self.last_direct_sun_at = timestamp
+        if (
+            not force
+            and self._last_direct_sun_saved_at is not None
+            and timestamp - self._last_direct_sun_saved_at < timedelta(minutes=15)
+        ):
+            return
+        self._last_direct_sun_saved_at = timestamp
+        self._schedule_save()
 
     def register_override(
         self,
@@ -136,12 +161,17 @@ class BehavioralLearner:
             self.override_counts.pop(entity_id, None)
         self._schedule_save()
 
-    def _storage_payload(self) -> dict[str, dict]:
+    def _storage_payload(self) -> dict[str, Any]:
         """Return only values which must survive a restart."""
         return {
             "position_biases": dict(self.position_biases),
             "temperature_offsets": dict(self.temperature_offsets),
             "override_counts": dict(self.override_counts),
+            "last_direct_sun_at": (
+                self.last_direct_sun_at.isoformat()
+                if self.last_direct_sun_at is not None
+                else None
+            ),
         }
 
     def diagnostics(self) -> dict[str, Any]:

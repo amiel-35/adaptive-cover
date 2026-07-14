@@ -27,6 +27,9 @@ from .const import (
     CONF_START_TIME_WORKDAY,
     CONF_START_TIME_WEEKEND,
     CONF_CLOSE_SUNSET_OFFSET,
+    CONF_END_ENTITY,
+    CONF_END_TIME,
+    CONF_START_TIME,
 )
 
 from .coordinator import AdaptiveDataUpdateCoordinator
@@ -434,12 +437,24 @@ class AdaptiveCoverScheduleSensorEntity(
 
         if workday_entity:
             state = self.hass.states.get(workday_entity)
-            if state:
+            if state and state.state in {"on", "off"}:
                 is_workday = state.state == "on"
 
-        start_w = self.config_entry.options.get(CONF_START_TIME_WORKDAY, "07:00:00")
-        start_we = self.config_entry.options.get(CONF_START_TIME_WEEKEND, "09:00:00")
-        offset = self.config_entry.options.get(CONF_CLOSE_SUNSET_OFFSET, 0)
+        if workday_entity:
+            start_w = self.config_entry.options.get(CONF_START_TIME_WORKDAY, "07:00:00")
+            start_we = self.config_entry.options.get(CONF_START_TIME_WEEKEND, "09:00:00")
+            start_today = start_w if is_workday else start_we
+        else:
+            start_today = self.config_entry.options.get(CONF_START_TIME, "00:00:00")
+        solar_end = (
+            not self.config_entry.options.get(CONF_END_ENTITY)
+            and self.config_entry.options.get(CONF_END_TIME, "00:00:00") == "00:00:00"
+        )
+        offset = (
+            self.config_entry.options.get(CONF_CLOSE_SUNSET_OFFSET, 0)
+            if solar_end
+            else None
+        )
 
         end_time_str = "Brak"
         if self.coordinator._end_time:
@@ -448,7 +463,8 @@ class AdaptiveCoverScheduleSensorEntity(
 
         return {
             "Dzisiaj dzień roboczy": "Tak" if is_workday else "Nie",
-            "Godzina otwarcia (Dzisiaj)": start_w if is_workday else start_we,
+            "Godzina otwarcia (Dzisiaj)": start_today,
             "Godzina zamknięcia (Dzisiaj)": end_time_str,
             "Przesunięcie zachodu (Minuty)": offset,
+            "Źródło zamknięcia": "zachód słońca" if solar_end else "stała godzina/encja",
         }

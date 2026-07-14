@@ -1,6 +1,6 @@
 """Fetch sun data."""
 
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 import pandas as pd
 from astral import Observer
@@ -49,9 +49,9 @@ class SunData:
         """Create list with solar elevation data per 5 minutes."""
         return [elevation(self.observer, moment) for moment in self.times]
 
-    def sunset(self) -> datetime:
+    def sunset(self, on_date: date | None = None) -> datetime:
         """Fetch sunset time."""
-        return sunset(self.observer, dt_util.now().date())
+        return sunset(self.observer, on_date or dt_util.now().date())
 
     def sunrise(self) -> datetime:
         """Fetch sunrise time."""

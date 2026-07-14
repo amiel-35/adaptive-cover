@@ -39,7 +39,14 @@ from .calculation import (
     NormalCoverState,
 )
 from .learning import BehavioralLearner
-from .decision import DecisionResult, decision_priority, position_requires_move
+from .decision import (
+    EMERGENCY_DECISION_CODES,
+    LEARNABLE_DECISION_CODES,
+    SCHEDULE_EXEMPT_DECISION_CODES,
+    DecisionResult,
+    decision_priority,
+    position_requires_move,
+)
 from .const import (
     _LOGGER,
     ATTR_POSITION,
@@ -99,6 +106,8 @@ from .const import (
     CONF_RETURN_SUNSET,
     CONF_START_ENTITY,
     CONF_START_TIME,
+    CONF_START_TIME_WEEKEND,
+    CONF_START_TIME_WORKDAY,
     CONF_SUNRISE_OFFSET,
     CONF_SUNSET_OFFSET,
     CONF_SUNSET_POS,
@@ -115,6 +124,7 @@ from .const import (
     CONF_WINDOW_ENTITY,
     CONF_WINDOW_OPEN_ACTION,
     CONF_WINDOW_OPEN_POSITION,
+    CONF_WORKDAY_ENTITY,
     CONF_RAIN_ENTITY,
     CONF_RAIN_POSITION,
     CONF_WIND_ENTITY,
@@ -201,6 +211,7 @@ class AdaptiveDataUpdateCoordinator(DataUpdateCoordinator[AdaptiveCoverData]):
         self._lux_low_light_state: bool | None = None
         self._irradiance_low_light_state: bool | None = None
         self._last_direct_sun_at: dt.datetime | None = None
+        self._direct_sun_was_active = False
         self.last_decision: DecisionResult | None = None
         self.last_decision_trace: list[dict] = []
         self.decision_history: deque[dict] = deque(maxlen=50)
@@ -226,6 +237,8 @@ class AdaptiveDataUpdateCoordinator(DataUpdateCoordinator[AdaptiveCoverData]):
         self.verify_task_metadata: dict[str, dict] = {}
         self._command_generation: dict[str, int] = {}
         self._unloading = False
+        self._runtime_initialized = False
+        self._runtime_initialization_task = None
         self._diagnostic_refresh = False
         self._started_at = dt.datetime.now(dt.UTC)
         self._update_count = 0
@@ -238,7 +251,7 @@ class AdaptiveDataUpdateCoordinator(DataUpdateCoordinator[AdaptiveCoverData]):
             CONF_MANUAL_IGNORE_INTERMEDIATE
         ]
         self._update_listener = None
-        self._scheduled_time = dt_util.utcnow()
+        self._scheduled_time: dt.datetime | None = None
         self._night_purge_update_listener = None
         self._night_purge_scheduled_time: dt.datetime | None = None
         self._forecast_temperature: float | None = None
@@ -250,9 +263,33 @@ class AdaptiveDataUpdateCoordinator(DataUpdateCoordinator[AdaptiveCoverData]):
     async def async_config_entry_first_refresh(self) -> None:
         """Config entry first refresh."""
         await self.learner.async_load()
-        self.first_refresh = True
+        self._last_direct_sun_at = self.learner.last_direct_sun_at
         await super().async_config_entry_first_refresh()
         self.logger.debug("Config entry first refresh")
+
+    def schedule_runtime_initialization(self) -> None:
+        """Schedule one movement pass after startup entities settle."""
+        if self._runtime_initialized or (
+            self._runtime_initialization_task is not None
+            and not self._runtime_initialization_task.done()
+        ):
+            return
+        self._runtime_initialization_task = self._create_background_task(
+            self.async_runtime_entities_initialized(),
+            f"adaptive_cover initialize runtime for {self.config_entry.entry_id}",
+        )
+
+    async def async_runtime_entities_initialized(self) -> None:
+        """Enable physical movement after Home Assistant startup stabilizes."""
+        await asyncio.sleep(2)
+        if self._unloading or self._runtime_initialized:
+            return
+        self.state_change = False
+        self.cover_state_change = False
+        self.state_change_data = None
+        self._runtime_initialized = True
+        self.first_refresh = True
+        await self.async_refresh()
 
     async def async_diagnostic_refresh(self) -> None:
         """Refresh calculations without issuing physical cover commands."""
@@ -297,6 +334,7 @@ class AdaptiveDataUpdateCoordinator(DataUpdateCoordinator[AdaptiveCoverData]):
 
     async def async_timed_refresh(self, event) -> None:
         """Control state at end time."""
+        self._update_listener = None
         self.timed_refresh = True
         self.logger.debug("Timed refresh triggered at %s", dt_util.now())
         await self.async_refresh()
@@ -308,13 +346,18 @@ class AdaptiveDataUpdateCoordinator(DataUpdateCoordinator[AdaptiveCoverData]):
         if not weather_entity:
             return None
 
+        cached_temperature = (
+            self._forecast_temperature
+            if self._forecast_entity == weather_entity
+            else None
+        )
         now = dt_util.utcnow()
         if (
             self._forecast_entity == weather_entity
             and self._forecast_fetched_at is not None
             and now - self._forecast_fetched_at < dt.timedelta(hours=1)
         ):
-            return self._forecast_temperature
+            return cached_temperature
 
         try:
             response = await self.hass.services.async_call(
@@ -330,11 +373,11 @@ class AdaptiveDataUpdateCoordinator(DataUpdateCoordinator[AdaptiveCoverData]):
                 weather_entity,
                 err,
             )
-            return self._forecast_temperature
+            return cached_temperature
 
         forecast = response.get(weather_entity, {}).get("forecast", [])
         if not forecast:
-            return self._forecast_temperature
+            return cached_temperature
         self._forecast_entity = weather_entity
         self._forecast_fetched_at = now
         self._forecast_temperature = _as_float(forecast[0].get("temperature"))
@@ -360,6 +403,12 @@ class AdaptiveDataUpdateCoordinator(DataUpdateCoordinator[AdaptiveCoverData]):
         self.state_change_data = StateChangedData(
             data["entity_id"], data["old_state"], data["new_state"]
         )
+        if (
+            self.ignore_intermediate_states
+            and self.state_change_data.new_state.state in {"opening", "closing"}
+        ):
+            self.logger.debug("Ignoring intermediate cover state")
+            return
         if self.state_change_data.old_state.state != "unknown":
             self.cover_state_change = True
             self.process_entity_state_change()
@@ -398,6 +447,7 @@ class AdaptiveDataUpdateCoordinator(DataUpdateCoordinator[AdaptiveCoverData]):
         if self._update_listener:
             self._update_listener()
             self._update_listener = None
+        self._scheduled_time = None
 
     @callback
     def _async_cancel_night_purge_listener(self) -> None:
@@ -465,14 +515,60 @@ class AdaptiveDataUpdateCoordinator(DataUpdateCoordinator[AdaptiveCoverData]):
         self.logger.debug("Night purge close scheduled at %s", target)
 
     async def async_close_after_night_purge(self, _event) -> None:
-        """Recalculate and apply the current decision at the purge deadline."""
+        """Zamknij rolety punktualnie po zakończeniu nocnego wietrzenia."""
         self._night_purge_update_listener = None
         self._night_purge_scheduled_time = None
 
-        if self.control_toggle and self.switch_mode:
-            self.state_change = True
+        await self._async_apply_night_purge_close()
         await self.async_refresh()
         self._schedule_night_purge_close()
+
+    async def _async_apply_night_purge_close(self) -> None:
+        """Apply the configured post-purge position without daytime schedule gates."""
+
+        if self._runtime_initialized and self.control_toggle and self.switch_mode:
+            close_position = self._active_options.get(CONF_SUNSET_POS, 0)
+            if self._inverse_state:
+                close_position = inverse_state(close_position)
+
+            await self.manager.reset_if_needed()
+            for cover in self.entities:
+                if await self.async_handle_window_policy(cover, close_position):
+                    continue
+                if self.manager.is_cover_manual(cover):
+                    self.manager.set_status(
+                        cover,
+                        "skipped",
+                        "manual_override_active",
+                    )
+                    continue
+                await self.async_set_manual_position(
+                    cover,
+                    close_position,
+                    enforce_current_target=False,
+                )
+
+    def _night_purge_close_overdue(self) -> bool:
+        """Return whether startup occurred after a missed morning purge deadline."""
+        if not (
+            self._climate_mode
+            and self.switch_mode
+            and self._active_options.get(CONF_NIGHT_PURGE_ENABLED, True)
+        ):
+            return False
+        try:
+            close_time = dt.time.fromisoformat(
+                self._active_options.get(CONF_NIGHT_PURGE_END_TIME, "07:00:00")
+            )
+        except (TypeError, ValueError):
+            return False
+        now_local = dt_util.now()
+        return bool(
+            close_time < dt.time(12)
+            and now_local.time() >= close_time
+            and self._start_time is not None
+            and dt_util.utcnow() < self._start_time
+        )
 
     async def async_timed_end_time(self) -> None:
         """Control state at end time."""
@@ -483,7 +579,7 @@ class AdaptiveDataUpdateCoordinator(DataUpdateCoordinator[AdaptiveCoverData]):
             self._end_time,
             self._track_end_time,
             self._scheduled_time,
-            self._end_time > self._scheduled_time,
+            self._end_time != self._scheduled_time,
         )
         self._update_listener = async_track_point_in_time(
             self.hass, self.async_timed_refresh, self._end_time
@@ -545,15 +641,20 @@ class AdaptiveDataUpdateCoordinator(DataUpdateCoordinator[AdaptiveCoverData]):
 
         await self.manager.reset_if_needed()
 
-        if (
-            self._end_time
-            and self._track_end_time
-            and self._end_time > self._scheduled_time
-        ):
-            await self.async_timed_end_time()
+        end_time = self._end_time
+        if self._track_end_time and end_time is not None:
+            if end_time != self._scheduled_time:
+                if end_time > dt_util.utcnow():
+                    await self.async_timed_end_time()
+                else:
+                    self._async_cancel_update_listener()
+                    self._scheduled_time = end_time
+                    self.timed_refresh = True
+        elif self._scheduled_time is not None:
+            self._async_cancel_update_listener()
 
         # Handle types of changes
-        if not self._diagnostic_refresh:
+        if self._runtime_initialized and not self._diagnostic_refresh:
             if self.state_change:
                 await self.async_handle_state_change(state, options)
             if self.cover_state_change:
@@ -789,6 +890,12 @@ class AdaptiveDataUpdateCoordinator(DataUpdateCoordinator[AdaptiveCoverData]):
                 position_tolerance=self.min_change,
                 current_temp=(climate.get_current_temperature if climate else None),
                 is_summer=(climate.is_summer if climate else False),
+                manual_until=self._manual_override_deadline(
+                    self.state_change_data.new_state.last_updated
+                    if self.state_change_data and self.state_change_data.new_state
+                    else dt_util.utcnow()
+                ),
+                allow_learning=(self._decision_code() in LEARNABLE_DECISION_CODES),
             )
         self.cover_state_change = False
         self.logger.debug("Cover state change handled")
@@ -810,12 +917,7 @@ class AdaptiveDataUpdateCoordinator(DataUpdateCoordinator[AdaptiveCoverData]):
         if action == WINDOW_ACTION_MOVE_TO_POSITION:
             target = int(self.window_open_position)
             self.manager.set_status(entity, "window_open", "moving_to_window_position")
-            if self.check_position(entity, target) and self.manager.can_move(
-                entity,
-                self.global_cooldown,
-                self.max_moves_per_hour,
-                self.max_moves_per_day,
-            ):
+            if self.check_position(entity, target):
                 await self.async_set_manual_position(
                     entity, target, enforce_current_target=False
                 )
@@ -832,22 +934,17 @@ class AdaptiveDataUpdateCoordinator(DataUpdateCoordinator[AdaptiveCoverData]):
     async def async_handle_first_refresh(self, state: int, options):
         """Handle first refresh."""
         if self.control_toggle:
+            if self._night_purge_close_overdue():
+                await self._async_apply_night_purge_close()
+                self.first_refresh = False
+                self.logger.debug("Missed night-purge deadline handled at startup")
+                return
+            if self.timed_refresh:
+                self.first_refresh = False
+                self.logger.debug("First refresh delegated to overdue end-time handler")
+                return
             for cover in self.entities:
-                target = self._target_for_entity(cover, state)
-                if await self.async_handle_window_policy(cover, target):
-                    continue
-                if (
-                    self.adaptive_movement_allowed
-                    and not self.manager.is_cover_manual(cover)
-                    and self.check_position_delta(cover, target, options)
-                    and self.manager.can_move(
-                        cover,
-                        self.global_cooldown,
-                        self.max_moves_per_hour,
-                        self.max_moves_per_day,
-                    )
-                ):
-                    await self.async_set_position(cover, target)
+                await self.async_handle_call_service(cover, state, options)
         else:
             self.logger.debug("First refresh but control toggle is off")
         self.first_refresh = False
@@ -888,6 +985,9 @@ class AdaptiveDataUpdateCoordinator(DataUpdateCoordinator[AdaptiveCoverData]):
 
     async def async_handle_call_service(self, entity, state: int, options):
         """Handle call service."""
+        if not self._runtime_initialized:
+            self.manager.set_status(entity, "skipped", "runtime_initializing")
+            return
         state = self._target_for_entity(entity, state)
         if await self.async_handle_window_policy(entity, state):
             return
@@ -902,23 +1002,31 @@ class AdaptiveDataUpdateCoordinator(DataUpdateCoordinator[AdaptiveCoverData]):
 
     def _target_for_entity(self, entity: str, state: int) -> int:
         """Apply learning only to comfort decisions, never to safety positions."""
-        cover = getattr(getattr(self, "normal_cover_state", None), "cover", None)
-        reason = getattr(cover, "state_info", "auto")
-        if reason in {"auto", "thermal_hold", "sun_shadow"}:
+        if self._decision_code() in LEARNABLE_DECISION_CODES:
             return self.learner.get_adjusted_position(entity, state)
         return state
 
+    def _decision_code(self) -> str:
+        """Return the decision code currently selected by the calculator."""
+        cover = getattr(getattr(self, "normal_cover_state", None), "cover", None)
+        return getattr(cover, "state_info", "auto")
+
     def movement_block_reason(self, entity, state: int, options) -> str | None:
         """Zwróć konkretny powód zablokowania ruchu rolety."""
-        if not self.adaptive_movement_allowed:
+        decision_code = self._decision_code()
+        emergency = decision_code in EMERGENCY_DECISION_CODES
+        if (
+            decision_code not in SCHEDULE_EXEMPT_DECISION_CODES
+            and not self.adaptive_movement_allowed
+        ):
             return "outside_adaptive_time"
         if not self.check_position_delta(entity, state, options):
             return "position_delta_too_small"
-        if not self.check_time_delta(entity):
+        if not emergency and not self.check_time_delta(entity):
             return "time_delta_not_passed"
-        if self.manager.is_cover_manual(entity):
+        if not emergency and self.manager.is_cover_manual(entity):
             return "manual_override_active"
-        if not self.manager.can_move(
+        if not emergency and not self.manager.can_move(
             entity,
             self.global_cooldown,
             self.max_moves_per_hour,
@@ -1232,17 +1340,7 @@ class AdaptiveDataUpdateCoordinator(DataUpdateCoordinator[AdaptiveCoverData]):
             CONF_MANUAL_OVERRIDE_DURATION, {"minutes": 15}
         )
         if hasattr(self, "manager"):
-            if self.manual_duration.get("minutes") == 9999:
-                end_time = self._end_time
-                if end_time is not None:
-                    duration = end_time - dt.datetime.now(dt.UTC)
-                    if duration <= dt.timedelta():
-                        duration += dt.timedelta(days=1)
-                    self.manager.reset_duration = duration
-                else:
-                    self.manager.reset_duration = dt.timedelta(minutes=9999)
-            else:
-                self.manager.reset_duration = dt.timedelta(**self.manual_duration)
+            self.manager.reset_duration = dt.timedelta(**self.manual_duration)
         self.manual_threshold = options.get(CONF_MANUAL_THRESHOLD)
         self.start_value = options.get(CONF_INTERP_START)
         self.end_value = options.get(CONF_INTERP_END)
@@ -1312,20 +1410,7 @@ class AdaptiveDataUpdateCoordinator(DataUpdateCoordinator[AdaptiveCoverData]):
     def after_start_time(self):
         """Check if time is after start time."""
         now = dt_util.utcnow()
-
-        # Logika Dni Roboczych (Workday)
-        is_workday = True
-        workday_entity = self.config_entry.options.get("workday_entity")
-        if workday_entity:
-            state = self.hass.states.get(workday_entity)
-            if state:
-                is_workday = state.state == "on"
-
-        # Pobieranie czasu z encji UI
-        if is_workday:
-            start_str = self.config_entry.options.get("start_time_workday", "07:00:00")
-        else:
-            start_str = self.config_entry.options.get("start_time_weekend", "09:00:00")
+        start_str = self._effective_start_value()
 
         value = (
             get_safe_state(self.hass, self.start_time_entity)
@@ -1341,6 +1426,45 @@ class AdaptiveDataUpdateCoordinator(DataUpdateCoordinator[AdaptiveCoverData]):
         self.logger.debug("Start time UTC: %s, now UTC: %s", time_utc, now)
         self._start_time = time_utc
         return now >= time_utc
+
+    def _effective_start_value(self) -> str:
+        """Return today's configured start time without guessing unavailable workdays."""
+        options = self._active_options
+        workday_entity = options.get(CONF_WORKDAY_ENTITY)
+        if not workday_entity:
+            return options.get(CONF_START_TIME, "00:00:00")
+
+        is_workday = True
+        workday_state = self.hass.states.get(workday_entity)
+        if workday_state and workday_state.state in {"on", "off"}:
+            is_workday = workday_state.state == "on"
+        key = CONF_START_TIME_WORKDAY if is_workday else CONF_START_TIME_WEEKEND
+        default = "07:00:00" if is_workday else "09:00:00"
+        return options.get(key, default)
+
+    def _manual_override_deadline(self, reference: dt.datetime) -> dt.datetime:
+        """Return one fixed reset deadline for a newly detected manual override."""
+        if reference.tzinfo is None:
+            reference = reference.replace(tzinfo=dt.UTC)
+        if self.manual_duration.get("minutes") != 9999:
+            return reference + dt.timedelta(**self.manual_duration)
+
+        cover = getattr(getattr(self, "normal_cover_state", None), "cover", None)
+        if cover is None:
+            return reference + dt.timedelta(minutes=9999)
+        local_reference = dt_util.as_local(reference)
+        sunset = cover.sun_data.sunset(local_reference.date()) + dt.timedelta(
+            minutes=self._active_options.get(CONF_SUNSET_OFFSET, 0)
+        )
+        sunset_utc = dt_util.as_utc(sunset)
+        if sunset_utc <= reference:
+            sunset_utc = dt_util.as_utc(
+                cover.sun_data.sunset(local_reference.date() + dt.timedelta(days=1))
+                + dt.timedelta(
+                    minutes=self._active_options.get(CONF_SUNSET_OFFSET, 0)
+                )
+            )
+        return sunset_utc
 
     @property
     def _end_time(self) -> dt.datetime | None:
@@ -1608,6 +1732,10 @@ class AdaptiveDataUpdateCoordinator(DataUpdateCoordinator[AdaptiveCoverData]):
 
         if has_direct_sun:
             self._last_direct_sun_at = dt_util.utcnow()
+            self.learner.remember_direct_sun(self._last_direct_sun_at)
+        elif self._direct_sun_was_active and self._last_direct_sun_at is not None:
+            self.learner.remember_direct_sun(self._last_direct_sun_at, force=True)
+        self._direct_sun_was_active = has_direct_sun
 
         climate.last_direct_sun_at = self._last_direct_sun_at
         climate_state = ClimateCoverState(cover_data, climate)
@@ -1686,7 +1814,7 @@ class AdaptiveDataUpdateCoordinator(DataUpdateCoordinator[AdaptiveCoverData]):
         """Interpolate states."""
         normal_range = [0, 100]
         new_range = []
-        if self.start_value and self.end_value:
+        if self.start_value is not None and self.end_value is not None:
             new_range = [self.start_value, self.end_value]
         if self.normal_list and self.new_list:
             normal_range = list(map(int, self.normal_list))
@@ -1781,6 +1909,7 @@ class AdaptiveCoverManager:
 
         self.manual_control: dict[str, bool] = {}
         self.manual_control_time: dict[str, dt.datetime] = {}
+        self.manual_control_until: dict[str, dt.datetime] = {}
         self.reset_duration = dt.timedelta(**reset_duration)
         self.logger = logger
         self.learner = learner
@@ -1889,6 +2018,8 @@ class AdaptiveCoverManager:
         position_tolerance=1,
         current_temp=None,
         is_summer=False,
+        manual_until=None,
+        allow_learning=True,
     ):
         """Process state change event."""
         event = states_data
@@ -1954,9 +2085,9 @@ class AdaptiveCoverManager:
                 allow_reset,
             )
             self.mark_manual_control(entity_id)
-            self.set_last_updated(entity_id, new_state, allow_reset)
+            self.set_last_updated(entity_id, new_state, allow_reset, manual_until)
 
-            if self.learner:
+            if self.learner and allow_learning:
                 self.learner.register_override(
                     entity_id,
                     current_temp,
@@ -1965,11 +2096,16 @@ class AdaptiveCoverManager:
                     is_summer,
                 )
 
-    def set_last_updated(self, entity_id, new_state, allow_reset):
+    def set_last_updated(self, entity_id, new_state, allow_reset, manual_until=None):
         """Set last updated time for manual control."""
         if entity_id not in self.manual_control_time or allow_reset:
             last_updated = new_state.last_updated
             self.manual_control_time[entity_id] = last_updated
+            self.manual_control_until[entity_id] = (
+                manual_until
+                if manual_until is not None
+                else last_updated + self.reset_duration
+            )
             self.logger.debug(
                 "Updating last updated for manual control to %s for %s. Allow reset:%s",
                 last_updated,
@@ -1993,7 +2129,10 @@ class AdaptiveCoverManager:
         current_time = dt.datetime.now(dt.UTC)
         manual_control_time_copy = dict(self.manual_control_time)
         for entity_id, last_updated in manual_control_time_copy.items():
-            if current_time - last_updated > self.reset_duration:
+            deadline = self.manual_control_until.get(
+                entity_id, last_updated + self.reset_duration
+            )
+            if current_time >= deadline:
                 self.logger.debug(
                     "Resetting manual override for %s, because duration has elapsed",
                     entity_id,
@@ -2004,6 +2143,7 @@ class AdaptiveCoverManager:
         """Reset manual control for a cover."""
         self.manual_control[entity_id] = False
         self.manual_control_time.pop(entity_id, None)
+        self.manual_control_until.pop(entity_id, None)
         self.set_status(entity_id, "auto", "manual_override_reset")
         self.logger.debug("Reset manual override for %s", entity_id)
 

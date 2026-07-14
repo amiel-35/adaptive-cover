@@ -6,14 +6,16 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.helpers.entity import DeviceInfo
 
-from .const import DOMAIN, CONF_CLOSE_SUNSET_OFFSET
+from .const import CONF_CLOSE_SUNSET_OFFSET, CONF_END_ENTITY, CONF_END_TIME, DOMAIN
 
 async def async_setup_entry(
     hass: HomeAssistant, config_entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
     """Set up the number platform."""
     coordinator = hass.data[DOMAIN][config_entry.entry_id]
-    async_add_entities([AdaptiveCoverOffsetNumber(coordinator, config_entry)])
+    end_time = config_entry.options.get(CONF_END_TIME, "00:00:00")
+    if not config_entry.options.get(CONF_END_ENTITY) and end_time == "00:00:00":
+        async_add_entities([AdaptiveCoverOffsetNumber(coordinator, config_entry)])
 
 class AdaptiveCoverOffsetNumber(CoordinatorEntity, NumberEntity):
     """Representation of a Number entity for sunset offset."""

@@ -7,7 +7,13 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.helpers.entity import DeviceInfo
 
-from .const import DOMAIN, CONF_START_TIME_WORKDAY, CONF_START_TIME_WEEKEND, CONF_WORKDAY_ENTITY
+from .const import (
+    CONF_START_TIME,
+    CONF_START_TIME_WEEKEND,
+    CONF_START_TIME_WORKDAY,
+    CONF_WORKDAY_ENTITY,
+    DOMAIN,
+)
 
 async def async_setup_entry(
     hass: HomeAssistant, config_entry: ConfigEntry, async_add_entities: AddEntitiesCallback
@@ -25,7 +31,7 @@ async def async_setup_entry(
         entities.append(AdaptiveCoverTimeEntity(coordinator, config_entry, CONF_START_TIME_WEEKEND, "Otwarcie (Dni wolne)", "09:00:00", "mdi:calendar-clock"))
     else:
         # Jeśli nie: dodajemy tylko jeden, uniwersalny czas otwarcia
-        entities.append(AdaptiveCoverTimeEntity(coordinator, config_entry, CONF_START_TIME_WORKDAY, "Czas otwarcia (Codziennie)", "07:00:00", "mdi:clock-outline"))
+        entities.append(AdaptiveCoverTimeEntity(coordinator, config_entry, CONF_START_TIME, "Czas otwarcia (Codziennie)", "00:00:00", "mdi:clock-outline"))
 
     async_add_entities(entities)
 

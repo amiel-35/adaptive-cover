@@ -23,16 +23,14 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .const import (
     CONF_SENSOR_TYPE,
     DOMAIN,
-    CONF_WORKDAY_ENTITY,
-    CONF_START_TIME_WORKDAY,
-    CONF_START_TIME_WEEKEND,
     CONF_CLOSE_SUNSET_OFFSET,
     CONF_END_ENTITY,
     CONF_END_TIME,
-    CONF_START_TIME,
 )
 
 from .coordinator import AdaptiveDataUpdateCoordinator
+from .options import normalize_options
+
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -80,6 +78,7 @@ async def async_setup_entry(
         config_entry.entry_id, hass, config_entry, name, coordinator
     )
     async_add_entities([sensor, start, end, control, explain, reason, schedule])
+
 
 class AdaptiveCoverSensorEntity(
     CoordinatorEntity[AdaptiveDataUpdateCoordinator], SensorEntity
@@ -142,6 +141,7 @@ class AdaptiveCoverSensorEntity(
     def extra_state_attributes(self) -> Mapping[str, Any] | None:  # noqa: D102
         return self.data.attributes
 
+
 class AdaptiveCoverTimeSensorEntity(
     CoordinatorEntity[AdaptiveDataUpdateCoordinator], SensorEntity
 ):
@@ -173,7 +173,9 @@ class AdaptiveCoverTimeSensorEntity(
         self._attr_translation_key = "start_sun" if key == "start" else "end_sun"
         self.coordinator = coordinator
         self.data = self.coordinator.data
-        self._attr_unique_id = f"{unique_id}_Start Sun" if key == "start" else f"{unique_id}_End Sun"
+        self._attr_unique_id = (
+            f"{unique_id}_Start Sun" if key == "start" else f"{unique_id}_End Sun"
+        )
         self._device_id = unique_id
         self.hass = hass
         self.config_entry = config_entry
@@ -201,6 +203,7 @@ class AdaptiveCoverTimeSensorEntity(
             name=self._name,
             model=self._device_name,
         )
+
 
 class AdaptiveCoverControlSensorEntity(
     CoordinatorEntity[AdaptiveDataUpdateCoordinator], SensorEntity
@@ -258,6 +261,7 @@ class AdaptiveCoverControlSensorEntity(
             model=self._device_name,
         )
 
+
 class AdaptiveCoverExplainSensorEntity(
     CoordinatorEntity[AdaptiveDataUpdateCoordinator], SensorEntity
 ):
@@ -266,13 +270,26 @@ class AdaptiveCoverExplainSensorEntity(
     _attr_has_entity_name = True
     _attr_should_poll = False
     _attr_icon = "mdi:text-box-search-outline"
-    _attr_translation_key = "algorithm_status" # Tłumaczenia z plików językowych
-    _attr_device_class = SensorDeviceClass.ENUM # Mówi HA, że to skończona lista wariantów
+    _attr_translation_key = "algorithm_status"  # Tłumaczenia z plików językowych
+    _attr_device_class = (
+        SensorDeviceClass.ENUM
+    )  # Mówi HA, że to skończona lista wariantów
     _attr_options = [
-        "auto", "control_disabled", "dawn_protection", "strict_sun_block",
-        "rain_detected", "wind_detected", "cold_protection", "night_purge",
-        "thermal_hold", "max_limit", "min_limit", "night_mode", "sun_shadow",
-        "calculating", "window_open",
+        "auto",
+        "control_disabled",
+        "dawn_protection",
+        "strict_sun_block",
+        "rain_detected",
+        "wind_detected",
+        "cold_protection",
+        "night_purge",
+        "thermal_hold",
+        "max_limit",
+        "min_limit",
+        "night_mode",
+        "sun_shadow",
+        "calculating",
+        "window_open",
     ]
 
     def __init__(
@@ -309,7 +326,9 @@ class AdaptiveCoverExplainSensorEntity(
     @property
     def native_value(self) -> str | None:
         """Fetch the explanation string."""
-        return self.data.states.get("explanation", "calculating") # Default ENUM fallback
+        return self.data.states.get(
+            "explanation", "calculating"
+        )  # Default ENUM fallback
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -320,6 +339,7 @@ class AdaptiveCoverExplainSensorEntity(
             name=self._name,
             model=self._device_name,
         )
+
 
 class AdaptiveCoverStateReasonSensorEntity(
     CoordinatorEntity[AdaptiveDataUpdateCoordinator], SensorEntity
@@ -377,6 +397,7 @@ class AdaptiveCoverStateReasonSensorEntity(
             model=self._device_name,
         )
 
+
 class AdaptiveCoverScheduleSensorEntity(
     CoordinatorEntity[AdaptiveDataUpdateCoordinator], SensorEntity
 ):
@@ -390,7 +411,12 @@ class AdaptiveCoverScheduleSensorEntity(
     _attr_options = ["active", "disabled", "outside_schedule"]
 
     def __init__(
-        self, unique_id: str, hass, config_entry, name: str, coordinator: AdaptiveDataUpdateCoordinator,
+        self,
+        unique_id: str,
+        hass,
+        config_entry,
+        name: str,
+        coordinator: AdaptiveDataUpdateCoordinator,
     ) -> None:
         """Initialize the schedule sensor."""
         super().__init__(coordinator=coordinator)
@@ -432,29 +458,18 @@ class AdaptiveCoverScheduleSensorEntity(
     @property
     def extra_state_attributes(self):
         """Return today's schedule details."""
-        is_workday = True
-        workday_entity = self.config_entry.options.get(CONF_WORKDAY_ENTITY)
-
-        if workday_entity:
-            state = self.hass.states.get(workday_entity)
-            if state and state.state in {"on", "off"}:
-                is_workday = state.state == "on"
-
-        if workday_entity:
-            start_w = self.config_entry.options.get(CONF_START_TIME_WORKDAY, "07:00:00")
-            start_we = self.config_entry.options.get(CONF_START_TIME_WEEKEND, "09:00:00")
-            start_today = start_w if is_workday else start_we
-        else:
-            start_today = self.config_entry.options.get(CONF_START_TIME, "00:00:00")
+        options = normalize_options(self.config_entry.options)
+        start_resolution = self.coordinator._last_start_time_resolution
+        start_today = None
+        if start_resolution and start_resolution.value:
+            start_today = start_resolution.value.strftime("%H:%M")
+        is_workday = bool(
+            start_resolution and start_resolution.source == "workday_start"
+        )
         solar_end = (
-            not self.config_entry.options.get(CONF_END_ENTITY)
-            and self.config_entry.options.get(CONF_END_TIME, "00:00:00") == "00:00:00"
+            not options[CONF_END_ENTITY] and options[CONF_END_TIME] == "00:00:00"
         )
-        offset = (
-            self.config_entry.options.get(CONF_CLOSE_SUNSET_OFFSET, 0)
-            if solar_end
-            else None
-        )
+        offset = options[CONF_CLOSE_SUNSET_OFFSET] if solar_end else None
 
         end_time_str = "Brak"
         if self.coordinator._end_time:
@@ -466,5 +481,18 @@ class AdaptiveCoverScheduleSensorEntity(
             "Godzina otwarcia (Dzisiaj)": start_today,
             "Godzina zamknięcia (Dzisiaj)": end_time_str,
             "Przesunięcie zachodu (Minuty)": offset,
-            "Źródło zamknięcia": "zachód słońca" if solar_end else "stała godzina/encja",
+            "Źródło otwarcia": (start_resolution.source if start_resolution else None),
+            "Powód zapasowego źródła otwarcia": (
+                start_resolution.fallback_reason if start_resolution else None
+            ),
+            "Źródło zamknięcia": (
+                self.coordinator._last_end_time_resolution.source
+                if self.coordinator._last_end_time_resolution
+                else None
+            ),
+            "Powód użycia źródła zapasowego": (
+                self.coordinator._last_end_time_resolution.fallback_reason
+                if self.coordinator._last_end_time_resolution
+                else None
+            ),
         }

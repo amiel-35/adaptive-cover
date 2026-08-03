@@ -111,9 +111,8 @@ from .const import (
     CONF_WINDOW_OPEN_POSITION,
     WINDOW_ACTION_PAUSE,
     WINDOW_OPEN_ACTIONS,
-    normalize_options,
-    validate_options,
 )
+from .options import normalize_options, validate_options
 
 # DEFAULT_NAME = "Adaptive Cover"
 
@@ -123,7 +122,9 @@ SENSOR_TYPE_MENU = [SensorType.BLIND, SensorType.AWNING, SensorType.TILT]
 CONFIG_SCHEMA = vol.Schema(
     {
         vol.Required("name"): selector.TextSelector(),
-        vol.Required(CONF_SENSOR_TYPE, default=SensorType.BLIND): selector.SelectSelector(
+        vol.Required(
+            CONF_SENSOR_TYPE, default=SensorType.BLIND
+        ): selector.SelectSelector(
             selector.SelectSelectorConfig(
                 options=SENSOR_TYPE_MENU, translation_key="mode"
             )
@@ -340,10 +341,14 @@ CLIMATE_OPTIONS = vol.Schema(
         vol.Optional(CONF_IRRADIANCE_THRESHOLD, default=300): selector.NumberSelector(
             selector.NumberSelectorConfig(mode="box", unit_of_measurement="W/m²")
         ),
-        vol.Optional(CONF_IRRADIANCE_THRESHOLD_ON, default=350): selector.NumberSelector(
+        vol.Optional(
+            CONF_IRRADIANCE_THRESHOLD_ON, default=350
+        ): selector.NumberSelector(
             selector.NumberSelectorConfig(mode="box", unit_of_measurement="W/m2")
         ),
-        vol.Optional(CONF_IRRADIANCE_THRESHOLD_OFF, default=250): selector.NumberSelector(
+        vol.Optional(
+            CONF_IRRADIANCE_THRESHOLD_OFF, default=250
+        ): selector.NumberSelector(
             selector.NumberSelectorConfig(mode="box", unit_of_measurement="W/m2")
         ),
         vol.Optional(CONF_TRANSPARENT_BLIND, default=False): selector.BooleanSelector(),
@@ -352,12 +357,24 @@ CLIMATE_OPTIONS = vol.Schema(
         ): selector.EntitySelector(
             selector.EntityFilterSelectorConfig(domain="weather")
         ),
-        vol.Optional(CONF_DAWN_MONTH_START, default=5): vol.All(vol.Coerce(int), vol.Range(min=1, max=12)),
-        vol.Optional(CONF_DAWN_MONTH_END, default=10): vol.All(vol.Coerce(int), vol.Range(min=1, max=12)),
-        vol.Optional(CONF_DAWN_DURATION, default=60): vol.All(vol.Coerce(int), vol.Range(min=0, max=300)),
-        vol.Optional(CONF_COLD_THRESHOLD, default=16): vol.All(vol.Coerce(int), vol.Range(min=-10, max=30)),
-        vol.Optional(CONF_WIND_THRESHOLD, default=40): vol.All(vol.Coerce(int), vol.Range(min=0, max=150)),
-        vol.Optional(CONF_NIGHT_PURGE_ENABLED, default=True): selector.BooleanSelector(),
+        vol.Optional(CONF_DAWN_MONTH_START, default=5): vol.All(
+            vol.Coerce(int), vol.Range(min=1, max=12)
+        ),
+        vol.Optional(CONF_DAWN_MONTH_END, default=10): vol.All(
+            vol.Coerce(int), vol.Range(min=1, max=12)
+        ),
+        vol.Optional(CONF_DAWN_DURATION, default=60): vol.All(
+            vol.Coerce(int), vol.Range(min=0, max=300)
+        ),
+        vol.Optional(CONF_COLD_THRESHOLD, default=16): vol.All(
+            vol.Coerce(int), vol.Range(min=-10, max=30)
+        ),
+        vol.Optional(CONF_WIND_THRESHOLD, default=40): vol.All(
+            vol.Coerce(int), vol.Range(min=0, max=150)
+        ),
+        vol.Optional(
+            CONF_NIGHT_PURGE_ENABLED, default=True
+        ): selector.BooleanSelector(),
         vol.Optional(
             CONF_NIGHT_PURGE_END_TIME, default="07:00:00"
         ): selector.TimeSelector(),
@@ -366,7 +383,9 @@ CLIMATE_OPTIONS = vol.Schema(
                 min=0, max=100, step=1, mode="slider", unit_of_measurement="%"
             )
         ),
-        vol.Optional(CONF_THERMAL_HOLD_AFTER_SUN, default=False): selector.BooleanSelector(),
+        vol.Optional(
+            CONF_THERMAL_HOLD_AFTER_SUN, default=False
+        ): selector.BooleanSelector(),
         vol.Optional(CONF_THERMAL_HOLD_POSITION, default=30): selector.NumberSelector(
             selector.NumberSelectorConfig(
                 min=0, max=100, step=1, mode="slider", unit_of_measurement="%"
@@ -377,7 +396,9 @@ CLIMATE_OPTIONS = vol.Schema(
                 min=0, max=720, step=15, mode="box", unit_of_measurement="min"
             )
         ),
-        vol.Optional(CONF_THERMAL_HOLD_RELEASE_DELTA, default=1.0): selector.NumberSelector(
+        vol.Optional(
+            CONF_THERMAL_HOLD_RELEASE_DELTA, default=1.0
+        ): selector.NumberSelector(
             selector.NumberSelectorConfig(
                 min=0, max=10, step=0.5, mode="box", unit_of_measurement="°C"
             )
@@ -452,7 +473,6 @@ AUTOMATION_CONFIG = vol.Schema(
             vol.Coerce(int), vol.Range(min=0, max=99)
         ),
         vol.Optional(CONF_MANUAL_IGNORE_INTERMEDIATE, default=False): bool,
-
         vol.Optional(CONF_WORKDAY_ENTITY): selector.EntitySelector(
             selector.EntitySelectorConfig(domain="binary_sensor")
         ),
@@ -460,7 +480,9 @@ AUTOMATION_CONFIG = vol.Schema(
         vol.Optional(CONF_WINDOW_ENTITY): selector.EntitySelector(
             selector.EntitySelectorConfig(domain=["binary_sensor", "input_boolean"])
         ),
-        vol.Optional(CONF_WINDOW_OPEN_ACTION, default=WINDOW_ACTION_PAUSE): selector.SelectSelector(
+        vol.Optional(
+            CONF_WINDOW_OPEN_ACTION, default=WINDOW_ACTION_PAUSE
+        ): selector.SelectSelector(
             selector.SelectSelectorConfig(
                 options=WINDOW_OPEN_ACTIONS,
                 translation_key="window_open_action",
@@ -507,7 +529,9 @@ def _get_azimuth_edges(data) -> tuple[int, int]:
     return data[CONF_FOV_LEFT] + data[CONF_FOV_RIGHT]
 
 
-def _conflicting_covers(hass, covers: list[str], excluded_entry_id: str | None = None) -> set[str]:
+def _conflicting_covers(
+    hass, covers: list[str], excluded_entry_id: str | None = None
+) -> set[str]:
     """Return covers already owned by another Adaptive Cover entry."""
     selected = set(covers or [])
     conflicts: set[str] = set()
@@ -559,9 +583,7 @@ class ConfigFlowHandler(ConfigFlow, domain=DOMAIN):
                     return self.async_show_form(
                         step_id="vertical",
                         data_schema=CLIMATE_MODE.extend(VERTICAL_OPTIONS.schema),
-                        errors={
-                            CONF_MAX_ELEVATION: "max_elevation_must_exceed_min"
-                        },
+                        errors={CONF_MAX_ELEVATION: "max_elevation_must_exceed_min"},
                     )
             self.config.update(user_input)
             if self.config[CONF_INTERP]:
@@ -586,9 +608,7 @@ class ConfigFlowHandler(ConfigFlow, domain=DOMAIN):
                     return self.async_show_form(
                         step_id="horizontal",
                         data_schema=CLIMATE_MODE.extend(HORIZONTAL_OPTIONS.schema),
-                        errors={
-                            CONF_MAX_ELEVATION: "max_elevation_must_exceed_min"
-                        },
+                        errors={CONF_MAX_ELEVATION: "max_elevation_must_exceed_min"},
                     )
             self.config.update(user_input)
             if self.config[CONF_INTERP]:
@@ -613,9 +633,7 @@ class ConfigFlowHandler(ConfigFlow, domain=DOMAIN):
                     return self.async_show_form(
                         step_id="tilt",
                         data_schema=CLIMATE_MODE.extend(TILT_OPTIONS.schema),
-                        errors={
-                            CONF_MAX_ELEVATION: "max_elevation_must_exceed_min"
-                        },
+                        errors={CONF_MAX_ELEVATION: "max_elevation_must_exceed_min"},
                     )
             self.config.update(user_input)
             if self.config[CONF_INTERP]:
@@ -636,9 +654,7 @@ class ConfigFlowHandler(ConfigFlow, domain=DOMAIN):
                 return self.async_show_form(
                     step_id="interp",
                     data_schema=INTERPOLATION_OPTIONS,
-                    errors={
-                        CONF_INTERP_LIST_NEW: "interpolation_lengths_must_match"
-                    },
+                    errors={CONF_INTERP_LIST_NEW: "interpolation_lengths_must_match"},
                 )
             self.config.update(user_input)
             if self.config[CONF_ENABLE_BLIND_SPOT]:
@@ -671,9 +687,7 @@ class ConfigFlowHandler(ConfigFlow, domain=DOMAIN):
                 return self.async_show_form(
                     step_id="blind_spot",
                     data_schema=schema,
-                    errors={
-                        CONF_BLIND_SPOT_RIGHT: "blind_spot_right_must_exceed_left"
-                    },
+                    errors={CONF_BLIND_SPOT_RIGHT: "blind_spot_right_must_exceed_left"},
                 )
             self.config.update(user_input)
             return await self.async_step_automation()
@@ -733,8 +747,12 @@ class ConfigFlowHandler(ConfigFlow, domain=DOMAIN):
                 CONF_DEFAULT_HEIGHT: self.config.get(CONF_DEFAULT_HEIGHT),
                 CONF_MAX_POSITION: self.config.get(CONF_MAX_POSITION),
                 CONF_MIN_POSITION: self.config.get(CONF_MIN_POSITION),
-                CONF_ENABLE_MAX_POSITION: self.config.get(CONF_ENABLE_MAX_POSITION, False),
-                CONF_ENABLE_MIN_POSITION: self.config.get(CONF_ENABLE_MIN_POSITION, False),
+                CONF_ENABLE_MAX_POSITION: self.config.get(
+                    CONF_ENABLE_MAX_POSITION, False
+                ),
+                CONF_ENABLE_MIN_POSITION: self.config.get(
+                    CONF_ENABLE_MIN_POSITION, False
+                ),
                 CONF_FOV_LEFT: self.config.get(CONF_FOV_LEFT),
                 CONF_FOV_RIGHT: self.config.get(CONF_FOV_RIGHT),
                 CONF_ENTITIES: self.config.get(CONF_ENTITIES),
@@ -798,32 +816,52 @@ class ConfigFlowHandler(ConfigFlow, domain=DOMAIN):
                 CONF_WIND_POSITION: self.config.get(CONF_WIND_POSITION, 0),
                 CONF_LUX_THRESHOLD_ON: self.config.get(CONF_LUX_THRESHOLD_ON, 1200),
                 CONF_LUX_THRESHOLD_OFF: self.config.get(CONF_LUX_THRESHOLD_OFF, 800),
-                CONF_IRRADIANCE_THRESHOLD_ON: self.config.get(CONF_IRRADIANCE_THRESHOLD_ON, 350),
-                CONF_IRRADIANCE_THRESHOLD_OFF: self.config.get(CONF_IRRADIANCE_THRESHOLD_OFF, 250),
+                CONF_IRRADIANCE_THRESHOLD_ON: self.config.get(
+                    CONF_IRRADIANCE_THRESHOLD_ON, 350
+                ),
+                CONF_IRRADIANCE_THRESHOLD_OFF: self.config.get(
+                    CONF_IRRADIANCE_THRESHOLD_OFF, 250
+                ),
                 # --- NASZE NOWE PARAMETRY ---
                 CONF_DAWN_MONTH_START: self.config.get(CONF_DAWN_MONTH_START, 5),
                 CONF_DAWN_MONTH_END: self.config.get(CONF_DAWN_MONTH_END, 10),
                 CONF_DAWN_DURATION: self.config.get(CONF_DAWN_DURATION, 60),
                 CONF_COLD_THRESHOLD: self.config.get(CONF_COLD_THRESHOLD, 16),
                 CONF_WIND_THRESHOLD: self.config.get(CONF_WIND_THRESHOLD, 40),
-                CONF_NIGHT_PURGE_ENABLED: self.config.get(CONF_NIGHT_PURGE_ENABLED, True),
+                CONF_NIGHT_PURGE_ENABLED: self.config.get(
+                    CONF_NIGHT_PURGE_ENABLED, True
+                ),
                 CONF_NIGHT_PURGE_END_TIME: self.config.get(
                     CONF_NIGHT_PURGE_END_TIME, "07:00:00"
                 ),
                 CONF_PURGE_POS: self.config.get(CONF_PURGE_POS, 15),
-                CONF_THERMAL_HOLD_AFTER_SUN: self.config.get(CONF_THERMAL_HOLD_AFTER_SUN, False),
-                CONF_THERMAL_HOLD_POSITION: self.config.get(CONF_THERMAL_HOLD_POSITION, 30),
-                CONF_THERMAL_HOLD_DURATION: self.config.get(CONF_THERMAL_HOLD_DURATION, 120),
+                CONF_THERMAL_HOLD_AFTER_SUN: self.config.get(
+                    CONF_THERMAL_HOLD_AFTER_SUN, False
+                ),
+                CONF_THERMAL_HOLD_POSITION: self.config.get(
+                    CONF_THERMAL_HOLD_POSITION, 30
+                ),
+                CONF_THERMAL_HOLD_DURATION: self.config.get(
+                    CONF_THERMAL_HOLD_DURATION, 120
+                ),
                 CONF_THERMAL_HOLD_RELEASE_DELTA: self.config.get(
                     CONF_THERMAL_HOLD_RELEASE_DELTA, 1.0
                 ),
                 CONF_RAIN_NIGHT_ONLY: self.config.get(CONF_RAIN_NIGHT_ONLY, False),
                 CONF_WINDOW_ENTITY: self.config.get(CONF_WINDOW_ENTITY),
-                CONF_WINDOW_OPEN_ACTION: self.config.get(CONF_WINDOW_OPEN_ACTION, WINDOW_ACTION_PAUSE),
-                CONF_WINDOW_OPEN_POSITION: self.config.get(CONF_WINDOW_OPEN_POSITION, 100),
+                CONF_WINDOW_OPEN_ACTION: self.config.get(
+                    CONF_WINDOW_OPEN_ACTION, WINDOW_ACTION_PAUSE
+                ),
+                CONF_WINDOW_OPEN_POSITION: self.config.get(
+                    CONF_WINDOW_OPEN_POSITION, 100
+                ),
                 CONF_WORKDAY_ENTITY: self.config.get(CONF_WORKDAY_ENTITY),
-                CONF_START_TIME_WORKDAY: self.config.get(CONF_START_TIME_WORKDAY, "07:00:00"),
-                CONF_START_TIME_WEEKEND: self.config.get(CONF_START_TIME_WEEKEND, "09:00:00"),
+                CONF_START_TIME_WORKDAY: self.config.get(
+                    CONF_START_TIME_WORKDAY, "07:00:00"
+                ),
+                CONF_START_TIME_WEEKEND: self.config.get(
+                    CONF_START_TIME_WEEKEND, "09:00:00"
+                ),
                 CONF_CLOSE_SUNSET_OFFSET: self.config.get(CONF_CLOSE_SUNSET_OFFSET, 0),
             },
         )
@@ -860,7 +898,13 @@ class OptionsFlowHandler(OptionsFlow):
     async def async_step_automation(self, user_input: dict[str, Any] | None = None):
         """Manage automation options."""
         if user_input is not None:
-            entities = [CONF_START_ENTITY, CONF_END_ENTITY, CONF_MANUAL_THRESHOLD, CONF_WINDOW_ENTITY, CONF_WORKDAY_ENTITY]
+            entities = [
+                CONF_START_ENTITY,
+                CONF_END_ENTITY,
+                CONF_MANUAL_THRESHOLD,
+                CONF_WINDOW_ENTITY,
+                CONF_WORKDAY_ENTITY,
+            ]
             self.optional_entities(entities, user_input)
             self.options.update(user_input)
             return await self._update_options()
@@ -900,9 +944,7 @@ class OptionsFlowHandler(OptionsFlow):
                     return self.async_show_form(
                         step_id="vertical",
                         data_schema=CLIMATE_MODE.extend(VERTICAL_OPTIONS.schema),
-                        errors={
-                            CONF_MAX_ELEVATION: "max_elevation_must_exceed_min"
-                        },
+                        errors={CONF_MAX_ELEVATION: "max_elevation_must_exceed_min"},
                     )
             self.options.update(user_input)
             if self.options.get(CONF_INTERP, False):
@@ -939,9 +981,7 @@ class OptionsFlowHandler(OptionsFlow):
                     return self.async_show_form(
                         step_id="horizontal",
                         data_schema=CLIMATE_MODE.extend(HORIZONTAL_OPTIONS.schema),
-                        errors={
-                            CONF_MAX_ELEVATION: "max_elevation_must_exceed_min"
-                        },
+                        errors={CONF_MAX_ELEVATION: "max_elevation_must_exceed_min"},
                     )
             self.options.update(user_input)
             if self.options[CONF_CLIMATE_MODE]:
@@ -974,9 +1014,7 @@ class OptionsFlowHandler(OptionsFlow):
                     return self.async_show_form(
                         step_id="tilt",
                         data_schema=CLIMATE_MODE.extend(TILT_OPTIONS.schema),
-                        errors={
-                            CONF_MAX_ELEVATION: "max_elevation_must_exceed_min"
-                        },
+                        errors={CONF_MAX_ELEVATION: "max_elevation_must_exceed_min"},
                     )
             self.options.update(user_input)
             if self.options[CONF_CLIMATE_MODE]:
@@ -998,9 +1036,7 @@ class OptionsFlowHandler(OptionsFlow):
                 return self.async_show_form(
                     step_id="interp",
                     data_schema=INTERPOLATION_OPTIONS,
-                    errors={
-                        CONF_INTERP_LIST_NEW: "interpolation_lengths_must_match"
-                    },
+                    errors={CONF_INTERP_LIST_NEW: "interpolation_lengths_must_match"},
                 )
             self.options.update(user_input)
             return await self._update_options()
@@ -1036,9 +1072,7 @@ class OptionsFlowHandler(OptionsFlow):
                 return self.async_show_form(
                     step_id="blind_spot",
                     data_schema=schema,
-                    errors={
-                        CONF_BLIND_SPOT_RIGHT: "blind_spot_right_must_exceed_left"
-                    },
+                    errors={CONF_BLIND_SPOT_RIGHT: "blind_spot_right_must_exceed_left"},
                 )
             self.options.update(user_input)
             return await self._update_options()

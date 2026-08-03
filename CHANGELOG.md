@@ -2,6 +2,112 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased] - 2026-08-03
+
+### Dodane
+- [Dodane] Diagnostyka temperatury zewnętrznej pokazuje wartość surową, pogodową wartość referencyjną, wartość zaakceptowaną, oczekującego kandydata i licznik odrzuconych skoków.
+
+### Zmienione
+- [Zmienione] Walidacje HACS i Hassfest uruchamiają się na żądanie, przy `push` i `pull request`, bez codziennego harmonogramu powodującego powtarzające się powiadomienia e-mail.
+- [Zmienione] Workflowy używają `actions/checkout@v5`, zgodnego z runtime Node.js 24 na GitHub Actions.
+
+### Naprawione
+- [Naprawione] `strings.json` zawiera pełne pola i opisy konfiguracji automatyki okna, zgodne z konfiguracją oraz tłumaczeniami.
+- [Naprawione] Usunięto błędnie zagnieżdżone tłumaczenie harmonogramu z encji statusu algorytmu w wersjach PL i EN.
+- [Naprawione] Integracja deklaruje `CONFIG_SCHEMA` właściwy dla konfiguracji wyłącznie przez wpisy konfiguracyjne, wymagany przez Hassfest.
+- [Naprawione] Krótkie błędne skoki wspólnego czujnika temperatury zewnętrznej z około `19°C` do `7,1°C` lub `6,5°C` nie przełączają już rolet między ochroną przed zimnem `0%` i nocnym przewietrzaniem `40/41%`.
+- [Naprawione] Duża zmiana temperatury przekraczająca `3°C` wymaga pięciu minut potwierdzenia; przy pierwszym odczycie po restarcie filtr może użyć bieżącej temperatury encji pogodowej jako bezpiecznej wartości referencyjnej.
+- [Naprawione] Decyzja `night_mode` używa po zachodzie skonfigurowanej pozycji nocnej zamiast zachowywać dzienny cel `100%`, który powodował dodatkowe otwarcie przed przejściem do nocnego przewietrzania.
+- [Naprawione] Dodano testy nocnych sekwencji `19,7 -> 7,1 -> 19,7°C`, utrzymującej się zmiany, pierwszego błędnego odczytu po restarcie oraz pozycji trybu nocnego; pełny zestaw obejmuje `110` testów.
+
+## [Unreleased] - 2026-08-02
+
+### Zmienione
+- [Zmienione] BehavioralLearner zapisuje preferencje wyłącznie podczas aktywnego harmonogramu automatyki komfortowej.
+- [Zmienione] Wersja ochrony danych BehavioralLearner została podniesiona do `4`; istniejące korekty utworzone przez ruchy spoza harmonogramu lub błędne źródło temperatury są jednorazowo zerowane z zachowaniem czasu ostatniego bezpośredniego słońca.
+- [Zmienione] Diagnostyka klimatu pokazuje teraz `low_light`, `is_summer`, `is_winter`, `temperature_source` i dostępność czujnika pokojowego, aby rozdzielić prognozę od aktualnych warunków i jakości wejść.
+
+### Naprawione
+- [Naprawione] Słabe promieniowanie i zerowy stres termiczny przywracają pozycję domyślną nawet wtedy, gdy wysoka prognoza temperatury włączyła tryb letni.
+- [Naprawione] Brak obecności nie powoduje już pełnego zamknięcia wyłącznie na podstawie prognozy; rzeczywista ochrona zależy od dodatniego stresu termicznego.
+- [Naprawione] Usunięto korektę, przez którą bazowy cel `100%` rolety Gabi był obniżany do `94%` po ruchu zarejestrowanym przed startem harmonogramu.
+- [Naprawione] Niedostępny skonfigurowany czujnik temperatury pomieszczenia nie jest już zastępowany temperaturą zewnętrzną, która dla rolety Gabi tworzyła fałszywy stres termiczny `100%` i cel `1%`.
+- [Naprawione] Eksport diagnostyki nie oznacza już stanów `unknown` i `unavailable` jako dostępnych.
+- [Naprawione] Czas zachodu zwracany przez Astral w UTC jest przeliczany na strefę lokalną przed oceną nocnego przewietrzania; rolety nie rozpoczynają go latem dwie godziny za wcześnie.
+- [Naprawione] Dodano testy regresji z wartościami eksportów z 02.08.2026, w tym przypadek Gabi oraz konwersję zachodu `18:17 UTC` na `20:17 CEST`; pełny zestaw obejmuje `106` testów.
+
+## [Unreleased] - 2026-07-30
+
+### Zmienione
+- [Zmienione] Ochrona przed chłodem używa histerezy `1°C`: aktywuje się poniżej skonfigurowanego progu i pozostaje aktywna do osiągnięcia progu zwolnienia.
+- [Zmienione] BehavioralLearner jednorazowo usuwa korekty utworzone przez dawny błąd rozpoznawania własnych ruchów, zachowując znacznik ostatniego bezpośredniego słońca.
+- [Zmienione] Diagnostyka pokazuje aktywność i oba progi ochrony przed chłodem oraz czas ostatniego fizycznego polecenia każdej rolety.
+
+### Naprawione
+- [Naprawione] Koniec nocnego przewietrzania ustawia skonfigurowaną pozycję nocną zamiast bieżącego celu geometrii lub klimatu; ta sama decyzja nadrabia pominięty termin po restarcie.
+- [Naprawione] Pośredni raport pozycji ze stanem `open` lub `closed`, wysłany podczas ruchu zleconego przez integrację, nie jest już uznawany za ręczną zmianę.
+- [Naprawione] Późny, powtórzony raport osiągniętej pozycji jest porównywany z ostatnim fizycznym celem, a nie z nowszą kalkulacją automatyki.
+- [Naprawione] Wahania temperatury wokół progu ochrony przed chłodem nie przełączają już rolet między pozycją zamknięcia i nocnego przewietrzania.
+- [Naprawione] Dodano testy regresji odtwarzające różne pozycje rolet o 06:00, fałszywe ręczne przejęcie podczas własnego ruchu i oscylację temperatury wokół `16°C`; pełny zestaw obejmuje `97` testów.
+
+## [Unreleased] - 2026-07-29
+
+### Dodane
+- [Dodane] Wprowadzono modele `RefreshTrigger`, `PendingRefreshes`, `CoverTarget` i `MovementResult`, które nadają zdarzeniom oraz wykonaniu poleceń jawny stan i rosnącą generację.
+- [Dodane] Dodano `ScheduleController` oraz wspólny resolver źródeł czasu z diagnostyką źródła, wartości surowej i powodu użycia fallbacku.
+- [Dodane] Diagnostyka pokazuje oczekujące, aktywne i ostatnio wykonane przyczyny odświeżenia, generację cyklu oraz sposób wyznaczenia końca harmonogramu.
+- [Dodane] Dodano testy runtime wykonawcy ruchów, BehavioralLearner, kolejki zdarzeń, timerów, fallbacków czasu, zmian DST oraz pełnego cyklu życia na Home Assistant `2026.7.4`; zestaw obejmuje 88 testów.
+- [Dodane] Dodano testy integracyjne startu, przeładowania, wyładowania, migracji, eksportów, anulowania retry i zatrzymania nieaktualnej partii dwóch rolet.
+
+### Zmienione
+- [Zmienione] Podniesiono wersję integracji do `1.6.0` i zaktualizowano deklarowane wsparcie do Home Assistant `2026.7+` oraz Python `3.14.2+`.
+- [Zmienione] Podzielono logikę na wyspecjalizowane moduły, w tym `coordinator_pipeline.py`; `coordinator.py` ma 190 linii i odpowiada wyłącznie za składanie oraz uruchamianie warstw runtime.
+- [Zmienione] Reguły klimatyczne korzystają z jednego niezmiennego snapshota wejść i wspólnego arbitra kandydatów, bez bezpośrednich odczytów `hass.states`.
+- [Zmienione] Zregenerowano `poetry.lock` dla Home Assistant `2026.7.4`, Python `>=3.14.2,<3.15` i Poetry `2.2.1`.
+- [Zmienione] Usunięto monolityczny `calculation.py`; geometria i reguły klimatyczne mają oddzielnych właścicieli.
+- [Zmienione] Wszystkie polecenia osłon, w tym retry i powrót po ręcznym przejęciu, przechodzą przez jedyną bramkę usług domeny `cover` w `movement.py`.
+- [Zmienione] Platformy encji korzystają ze znormalizowanych opcji, a encje czasu używają `translation_key` w wersjach PL i EN.
+- [Zmienione] Ujednolicono metadane projektu, autora forka, repozytorium, licencję MIT i odnośniki wydań w `pyproject.toml`.
+
+### Naprawione
+- [Naprawione] Koniec nocnego wietrzenia oraz pominięty termin po restarcie uruchamiają świeżą decyzję; deszcz, wiatr i polityka okna nie mogą zostać nadpisane pozycją nocną.
+- [Naprawione] Zdarzenia przychodzące podczas trwającego `await` nie są zerowane przez starszy cykl, a nowsza generacja zatrzymuje wysyłanie pozostałych nieaktualnych celów do grupy rolet.
+- [Naprawione] Retry porównuje finalny cel po korekcie BehavioralLearner, unieważnia starsze generacje i pozwala deszczowi oraz wiatrowi ominąć limity ruchu.
+- [Naprawione] Niedostępna lub błędna encja końca harmonogramu przechodzi kolejno na jawną godzinę oraz zachód słońca z przesunięciem.
+- [Naprawione] Priorytety ograniczeń pozycji w `decision_trace` odpowiadają rzeczywistej kolejności wykonania.
+- [Naprawione] Termin harmonogramu zachowuje aktywne fizyczne ograniczenie minimalnej lub maksymalnej pozycji zamiast zastępować je nieograniczoną pozycją nocną.
+- [Naprawione] Zwykły koniec harmonogramu jest jawnym kandydatem `timed_end`: nadpisuje decyzje komfortowe, ale pozostaje poniżej aktualnych zabezpieczeń.
+- [Naprawione] Koordynator przekazuje `config_entry` do `DataUpdateCoordinator`, zgodnie z kontraktem Home Assistant wymaganym od wersji 2026.8.
+- [Naprawione] Eksport diagnostyki pokazuje osobne rozstrzygnięcia początku i końca harmonogramu oraz poprawne identyfikatory encji temperatur zamiast wartości w polu `outside_temperature_entity`.
+- [Naprawione] Przycisk resetu ręcznego przejęcia nie raportuje sukcesu, dopóki napęd nie potwierdzi pozycji docelowej.
+- [Naprawione] Niestandardowe czasy z `DurationSelector` są normalizowane do minut i pozostają widoczne w encji wyboru zamiast zmieniać się pozornie na 60 minut.
+- [Naprawione] Usunięto wymuszony import platformy diagnostycznej z `__init__.py`, który mógł wywoływać ostrzeżenie o blokującym `import_module` podczas startu HA.
+
+## [Unreleased] - 2026-07-26
+
+### Dodane
+- [Dodane] Utworzono szczegółowy `PLAN_STABILIZACJI_I_MODULARYZACJI.md`, który porządkuje naprawy kolejności wykonania, testy runtime oraz etapowy podział koordynatora na mniejsze moduły.
+
+## [Unreleased] - 2026-07-16
+
+### Zmienione
+- [Zmienione] Podniesiono wersję integracji do `1.5.6`.
+
+### Naprawione
+- [Naprawione] Encja `Przesunięcie zachodu (Zamykanie)` jest ponownie zawsze ładowana i nie pozostaje wyszarzona po ustawieniu jawnej godziny zakończenia lub encji końca.
+- [Dodane] Dodano test regresyjny sprawdzający bezwarunkowe utworzenie encji przesunięcia zachodu.
+
+## [Unreleased] - 2026-07-15
+
+### Zmienione
+- [Zmienione] Podniesiono wersję integracji do `1.5.5` po analizie diagnostyki z całodziennego działania Home Assistant 2026.7.
+
+### Naprawione
+- [Naprawione] Zastąpiono ręczne nasłuchiwanie `EVENT_HOMEASSISTANT_STARTED` helperem `async_at_started`, który poprawnie obsługuje zarówno pełny start HA, jak i przeładowanie integracji już podczas pracy systemu.
+- [Naprawione] `runtime_initialized` nie pozostaje już stale `false`; po zakończeniu inicjalizacji integracja wykonuje aktualny cel zamiast ograniczać się do samych obliczeń.
+- [Naprawione] Rolety pozostające fizycznie na `95–100%` otrzymają wyliczoną pozycję nocnego przewietrzania `40–41%`, jeżeli nie blokuje ich okno ani ręczne przejęcie.
+- [Dodane] Dodano test regresyjny wymagający użycia bezpiecznego helpera cyklu życia Home Assistant.
+
 ## [Unreleased] - 2026-07-14
 
 ### Zmienione

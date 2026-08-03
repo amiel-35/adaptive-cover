@@ -24,6 +24,7 @@ from .const import (
     DOMAIN,
 )
 from .coordinator import AdaptiveDataUpdateCoordinator
+from .options import normalize_options
 
 
 async def async_setup_entry(
@@ -101,14 +102,15 @@ async def async_setup_entry(
         coordinator,
     )
 
-    climate_mode = config_entry.options.get(CONF_CLIMATE_MODE)
-    weather_entity = config_entry.options.get(CONF_WEATHER_ENTITY)
-    sensor_entity = config_entry.options.get(CONF_OUTSIDETEMP_ENTITY)
-    lux_entity = config_entry.options.get(CONF_LUX_ENTITY)
-    irradiance_entity = config_entry.options.get(CONF_IRRADIANCE_ENTITY)
+    options = normalize_options(config_entry.options)
+    climate_mode = options[CONF_CLIMATE_MODE]
+    weather_entity = options[CONF_WEATHER_ENTITY]
+    sensor_entity = options[CONF_OUTSIDETEMP_ENTITY]
+    lux_entity = options[CONF_LUX_ENTITY]
+    irradiance_entity = options[CONF_IRRADIANCE_ENTITY]
     switches = []
 
-    if len(config_entry.options.get(CONF_ENTITIES)) >= 1:
+    if options[CONF_ENTITIES]:
         switches = [control_switch, manual_switch, dry_run_switch]
 
     if climate_mode:

@@ -1,21 +1,25 @@
 """Number platform for Adaptive Cover."""
+
 from homeassistant.components.number import NumberEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
-from homeassistant.helpers.entity import DeviceInfo
 
-from .const import CONF_CLOSE_SUNSET_OFFSET, CONF_END_ENTITY, CONF_END_TIME, DOMAIN
+from .const import CONF_CLOSE_SUNSET_OFFSET, DOMAIN
+from .options import normalize_options
+
 
 async def async_setup_entry(
-    hass: HomeAssistant, config_entry: ConfigEntry, async_add_entities: AddEntitiesCallback
+    hass: HomeAssistant,
+    config_entry: ConfigEntry,
+    async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up the number platform."""
     coordinator = hass.data[DOMAIN][config_entry.entry_id]
-    end_time = config_entry.options.get(CONF_END_TIME, "00:00:00")
-    if not config_entry.options.get(CONF_END_ENTITY) and end_time == "00:00:00":
-        async_add_entities([AdaptiveCoverOffsetNumber(coordinator, config_entry)])
+    async_add_entities([AdaptiveCoverOffsetNumber(coordinator, config_entry)])
+
 
 class AdaptiveCoverOffsetNumber(CoordinatorEntity, NumberEntity):
     """Representation of a Number entity for sunset offset."""
@@ -37,7 +41,9 @@ class AdaptiveCoverOffsetNumber(CoordinatorEntity, NumberEntity):
         self._attr_native_unit_of_measurement = "min"
         self._attr_mode = "box"
 
-        self._attr_native_value = float(config_entry.options.get(self._key, 0))
+        self._attr_native_value = float(
+            normalize_options(config_entry.options)[self._key]
+        )
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -52,5 +58,7 @@ class AdaptiveCoverOffsetNumber(CoordinatorEntity, NumberEntity):
         self._attr_native_value = value
         new_options = dict(self.config_entry.options)
         new_options[self._key] = int(value)
-        self.hass.config_entries.async_update_entry(self.config_entry, options=new_options)
+        self.hass.config_entries.async_update_entry(
+            self.config_entry, options=new_options
+        )
         self.async_write_ha_state()

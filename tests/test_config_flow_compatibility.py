@@ -5,9 +5,7 @@ from pathlib import Path
 import unittest
 
 ROOT = Path(__file__).parents[1]
-CONFIG_FLOW_PATH = (
-    ROOT / "custom_components" / "adaptive_cover" / "config_flow.py"
-)
+CONFIG_FLOW_PATH = ROOT / "custom_components" / "adaptive_cover" / "config_flow.py"
 
 
 class OptionsFlowCompatibilityTests(unittest.TestCase):

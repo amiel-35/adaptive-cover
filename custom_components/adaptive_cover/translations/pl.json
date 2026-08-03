@@ -119,6 +119,7 @@
           "lux_entity": "Sensor natężenia światła Lux (Opcjonalnie)",
           "lux_threshold": "Próg Lux",
           "irradiance_entity": "Sensor promieniowania słonecznego (Opcjonalnie)",
+          "irradiance_threshold": "Próg promieniowania",
           "outside_threshold": "Minimalna temperatura zewnętrzna dla trybu letniego",
           "rain_entity": "Czujnik opadów / deszczu (Opcjonalnie)",
           "wind_entity": "Czujnik prędkości wiatru (Opcjonalnie)",
@@ -159,6 +160,7 @@
           "lux_threshold_off": "Dolny próg wejścia w tryb słabego światła",
           "irradiance_threshold_on": "Górny próg wyjścia z trybu słabego nasłonecznienia",
           "irradiance_threshold_off": "Dolny próg wejścia w tryb słabego nasłonecznienia",
+          "outside_threshold": "Minimalna temperatura zewnętrzna zezwalająca na tryb letni",
           "rain_position": "Pozycja używana, gdy aktywna jest ochrona przed deszczem",
           "wind_position": "Pozycja używana, gdy aktywna jest ochrona przed wiatrem",
           "night_purge_enabled": "Pozwala automatycznie lekko uchylić roletę po zachodzie, gdy na zewnątrz jest chłodniej niż w pokoju.",
@@ -618,6 +620,9 @@
   },
   "entity": {
     "time": {
+      "start_time": {
+        "name": "Otwarcie (Codziennie)"
+      },
       "start_time_workday": {
         "name": "Otwarcie (Dni robocze)"
       },
@@ -658,9 +663,6 @@
         "name": "Metoda sterowania"
       },
       "algorithm_status": {
-        "schedule": {
-          "name": "Harmonogram na dzisiaj"
-        },
         "name": "Status algorytmu",
         "state": {
           "auto": "Tryb automatyczny (Słońce / Klimat)",

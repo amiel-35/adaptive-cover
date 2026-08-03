@@ -1,4 +1,5 @@
 """Select platform for Adaptive Cover."""
+
 from homeassistant.components.select import SelectEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -6,17 +7,31 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.helpers.entity import DeviceInfo
 
-from .const import DOMAIN
+from .const import CONF_MANUAL_OVERRIDE_DURATION, DOMAIN
+from .options import normalize_options
 
-OPTIONS = [
+OPTIONS = (
     "none",
     "15_min",
     "30_min",
     "60_min",
     "120_min",
     "240_min",
-    "sunset"
-]
+    "sunset",
+)
+
+MINUTES_TO_OPTION = {
+    0: "none",
+    15: "15_min",
+    30: "30_min",
+    60: "60_min",
+    120: "120_min",
+    240: "240_min",
+    9999: "sunset",
+}
+OPTION_TO_MINUTES = {option: minutes for minutes, option in MINUTES_TO_OPTION.items()}
+CUSTOM_PREFIX = "custom_"
+
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -26,6 +41,7 @@ async def async_setup_entry(
     """Set up the select platform."""
     coordinator = hass.data[DOMAIN][config_entry.entry_id]
     async_add_entities([AdaptiveCoverOverrideSelect(coordinator, config_entry)])
+
 
 class AdaptiveCoverOverrideSelect(CoordinatorEntity, SelectEntity):
     """Representation of a Select entity for Manual Override Duration."""
@@ -39,22 +55,16 @@ class AdaptiveCoverOverrideSelect(CoordinatorEntity, SelectEntity):
         self.config_entry = config_entry
         self._attr_unique_id = f"{config_entry.entry_id}_override_duration"
         self._attr_icon = "mdi:timer-cog"
-        self._attr_options = OPTIONS
-
-        # Pobieramy to, co jest aktualnie zapisane w opcjach integracji
-        duration_dict = config_entry.options.get("manual_override_duration", {"minutes": 15})
-        minutes = duration_dict.get("minutes", 15)
-
-        mapping_rev = {
-            0: "none",
-            15: "15_min",
-            30: "30_min",
-            60: "60_min",
-            120: "120_min",
-            240: "240_min",
-            9999: "sunset"
-        }
-        self._attr_current_option = mapping_rev.get(minutes, "60_min")
+        self._attr_options = list(OPTIONS)
+        duration_dict = normalize_options(config_entry.options)[
+            CONF_MANUAL_OVERRIDE_DURATION
+        ]
+        minutes = max(0, int(duration_dict.get("minutes", 15)))
+        current_option = MINUTES_TO_OPTION.get(minutes)
+        if current_option is None:
+            current_option = f"{CUSTOM_PREFIX}{minutes}_min"
+            self._attr_options.append(current_option)
+        self._attr_current_option = current_option
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -68,18 +78,21 @@ class AdaptiveCoverOverrideSelect(CoordinatorEntity, SelectEntity):
         """Change the selected option and SAVE permanently."""
         self._attr_current_option = option
 
-        mapping = {
-            "none": 0,
-            "15_min": 15,
-            "30_min": 30,
-            "60_min": 60,
-            "120_min": 120,
-            "240_min": 240,
-            "sunset": 9999
-        }
-        minutes = mapping.get(option, 60)
+        minutes = OPTION_TO_MINUTES.get(option)
+        if (
+            minutes is None
+            and option.startswith(CUSTOM_PREFIX)
+            and option.endswith("_min")
+        ):
+            minutes = int(option.removeprefix(CUSTOM_PREFIX).removesuffix("_min"))
+        if minutes is None:
+            raise ValueError(
+                f"Nieobsługiwana wartość czasu sterowania ręcznego: {option}"
+            )
         new_options = dict(self.config_entry.options)
-        new_options["manual_override_duration"] = {"minutes": minutes}
+        new_options[CONF_MANUAL_OVERRIDE_DURATION] = {"minutes": minutes}
 
-        self.hass.config_entries.async_update_entry(self.config_entry, options=new_options)
+        self.hass.config_entries.async_update_entry(
+            self.config_entry, options=new_options
+        )
         self.async_write_ha_state()

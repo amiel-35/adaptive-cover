@@ -19,9 +19,7 @@ class MetadataConsistencyTests(unittest.TestCase):
                 encoding="utf-8"
             )
         )
-        pyproject = tomllib.loads(
-            (ROOT / "pyproject.toml").read_text(encoding="utf-8")
-        )
+        pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
         const_source = (
             ROOT / "custom_components" / "adaptive_cover" / "const.py"
         ).read_text(encoding="utf-8")
@@ -56,6 +54,23 @@ class MetadataConsistencyTests(unittest.TestCase):
         self.assertEqual(hacs["name"], manifest["name"])
         self.assertTrue((ROOT / "NOTICE.md").is_file())
         self.assertTrue((ROOT / "brand" / "icon.png").is_file())
+
+    def test_polish_and_english_translation_keys_match(self) -> None:
+        """Nie pozwalaj platformom udostępniać klucza tylko w jednym języku."""
+        translation_dir = ROOT / "custom_components" / "adaptive_cover" / "translations"
+        english = json.loads((translation_dir / "en.json").read_text(encoding="utf-8"))
+        polish = json.loads((translation_dir / "pl.json").read_text(encoding="utf-8"))
+
+        def nested_keys(value, prefix=""):
+            keys = set()
+            if isinstance(value, dict):
+                for key, nested in value.items():
+                    path = f"{prefix}.{key}" if prefix else key
+                    keys.add(path)
+                    keys.update(nested_keys(nested, path))
+            return keys
+
+        self.assertEqual(nested_keys(english), nested_keys(polish))
 
 
 if __name__ == "__main__":

@@ -11,6 +11,7 @@ from homeassistant.util import dt as dt_util
 try:
     from homeassistant.helpers.sun import get_astral_observer
 except ImportError:
+
     def get_astral_observer(hass: HomeAssistant) -> Observer:
         """Build an Astral observer for older Home Assistant releases."""
         return Observer(
@@ -53,9 +54,9 @@ class SunData:
         """Fetch sunset time."""
         return sunset(self.observer, on_date or dt_util.now().date())
 
-    def sunrise(self) -> datetime:
+    def sunrise(self, on_date: date | None = None) -> datetime:
         """Fetch sunrise time."""
-        return sunrise(self.observer, dt_util.now().date())
+        return sunrise(self.observer, on_date or dt_util.now().date())
 
     # def df_today(self)-> pd.DataFrame:
     #     """Create dataframe with azimuth and elevation data"""

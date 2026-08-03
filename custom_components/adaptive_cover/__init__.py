@@ -11,15 +11,12 @@ from numbers import Integral, Real
 import platform as python_platform
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import (
-    EVENT_HOMEASSISTANT_STARTED,
-    Platform,
-    __version__ as ha_version,
-)
-from homeassistant.core import CoreState, HomeAssistant, ServiceCall, State
+from homeassistant.const import Platform, __version__ as ha_version
+from homeassistant.core import HomeAssistant, ServiceCall, State
 from homeassistant.helpers.event import (
     async_track_state_change_event,
 )
+from homeassistant.helpers.start import async_at_started
 import homeassistant.helpers.config_validation as cv
 from homeassistant.util import dt as dt_util
 import json
@@ -46,14 +43,26 @@ from .const import (
     INTEGRATION_VERSION,
     SETTINGS_SCHEMA_VERSION,
     _LOGGER,
-    normalize_options,
-    validate_options,
 )
 from .coordinator import AdaptiveDataUpdateCoordinator
-from .diagnostic_helpers import dated_filename, position_diagnostics
+from .diagnostic_helpers import (
+    dated_filename,
+    entity_state_available,
+    position_diagnostics,
+)
+from .options import normalize_options, validate_options
 
-PLATFORMS = [Platform.SENSOR, Platform.SWITCH, Platform.BINARY_SENSOR, Platform.BUTTON, Platform.SELECT, Platform.TIME, Platform.NUMBER]
+PLATFORMS = [
+    Platform.SENSOR,
+    Platform.SWITCH,
+    Platform.BINARY_SENSOR,
+    Platform.BUTTON,
+    Platform.SELECT,
+    Platform.TIME,
+    Platform.NUMBER,
+]
 CONF_SUN = ["sun.sun"]
+CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 TRACKED_OPTION_KEYS = [
     CONF_TEMP_ENTITY,
     CONF_PRESENCE_ENTITY,
@@ -108,7 +117,9 @@ def _json_safe(value):
             "attributes": _json_safe(dict(value.attributes)),
             "last_changed": value.last_changed.isoformat(),
             "last_updated": value.last_updated.isoformat(),
-            "last_reported": getattr(value, "last_reported", value.last_updated).isoformat(),
+            "last_reported": getattr(
+                value, "last_reported", value.last_updated
+            ).isoformat(),
             "age_seconds": max(
                 0.0,
                 (dt.datetime.now(dt.UTC) - value.last_updated).total_seconds(),
@@ -147,11 +158,13 @@ def _entity_snapshot(hass: HomeAssistant, entity_id: str | None) -> dict | None:
     if state is None:
         return {"entity_id": entity_id, "state": None, "available": False}
     snapshot = _json_safe(state)
-    snapshot["available"] = True
+    snapshot["available"] = entity_state_available(state.state)
     return snapshot
 
 
-def _cover_position_from_snapshot(snapshot: dict | None, cover_type: str | None) -> int | float | None:
+def _cover_position_from_snapshot(
+    snapshot: dict | None, cover_type: str | None
+) -> int | float | None:
     """Zwróć aktualną pozycję rolety ze zrzutu stanu Home Assistant."""
     attributes = (snapshot or {}).get("attributes") or {}
     if cover_type == "cover_tilt":
@@ -191,7 +204,9 @@ def _cover_diagnostics(
         movement_checks = {
             "adaptive_time_ok": bool(getattr(coordinator, "check_adaptive_time", True)),
             "position_delta_ok": (
-                coordinator.check_position_delta(entity_id, target_position_int, options)
+                coordinator.check_position_delta(
+                    entity_id, target_position_int, options
+                )
                 if target_position_int is not None
                 else None
             ),
@@ -224,7 +239,9 @@ def _cover_diagnostics(
         "entity_id": entity_id,
         "available": (snapshot or {}).get("available", False),
         "ha_state": (snapshot or {}).get("state"),
-        "friendly_name": ((snapshot or {}).get("attributes") or {}).get("friendly_name"),
+        "friendly_name": ((snapshot or {}).get("attributes") or {}).get(
+            "friendly_name"
+        ),
         "current_position": current_position,
         "target_position": target_position_int,
         **position_report,
@@ -254,17 +271,22 @@ def _cover_diagnostics(
             else None
         ),
         "wait_for_target": (
-            getattr(coordinator, "wait_for_target", {}).get(entity_id)
+            coordinator.movement.is_waiting(entity_id)
             if coordinator is not None
             else None
         ),
         "target_call": (
-            getattr(coordinator, "target_call", {}).get(entity_id)
+            coordinator.movement.target_for(entity_id)
+            if coordinator is not None
+            else None
+        ),
+        "last_command_at": (
+            coordinator.movement.last_command_at.get(entity_id)
             if coordinator is not None
             else None
         ),
         "command_generation": (
-            getattr(coordinator, "_command_generation", {}).get(entity_id)
+            coordinator.movement.command_generation.get(entity_id)
             if coordinator is not None
             else None
         ),
@@ -282,13 +304,12 @@ def _enum_value(value):
 
 def _task_diagnostics(coordinator: AdaptiveDataUpdateCoordinator) -> dict:
     """Return active task state merged with retained retry metadata."""
-    entities = set(coordinator.verify_task_metadata) | set(coordinator.verify_tasks)
+    movement = coordinator.movement
+    entities = set(movement.verify_task_metadata) | set(movement.verify_tasks)
     result = {}
     for entity_id in sorted(entities):
-        task = coordinator.verify_tasks.get(entity_id)
-        result[entity_id] = dict(
-            coordinator.verify_task_metadata.get(entity_id, {})
-        ) | {
+        task = movement.verify_tasks.get(entity_id)
+        result[entity_id] = dict(movement.verify_task_metadata.get(entity_id, {})) | {
             "task_present": task is not None,
             "task_name": task.get_name() if task is not None else None,
             "task_done": task.done() if task is not None else None,
@@ -329,9 +350,7 @@ def _coordinator_runtime(coordinator: AdaptiveDataUpdateCoordinator | None) -> d
                 dt.datetime.now(dt.UTC) - coordinator._started_at
             ).total_seconds(),
             "update_count": coordinator._update_count,
-            "last_update_success": getattr(
-                coordinator, "last_update_success", None
-            ),
+            "last_update_success": getattr(coordinator, "last_update_success", None),
             "last_exception": (
                 f"{type(last_exception).__name__}: {last_exception}"
                 if last_exception
@@ -346,25 +365,54 @@ def _coordinator_runtime(coordinator: AdaptiveDataUpdateCoordinator | None) -> d
             "state_change_pending": coordinator.state_change,
             "cover_state_change_pending": coordinator.cover_state_change,
             "timed_refresh_pending": coordinator.timed_refresh,
+            "pending_refresh_triggers": sorted(
+                trigger.value for trigger in coordinator._pending_refreshes.values
+            ),
+            "active_refresh_triggers": sorted(
+                trigger.value for trigger in coordinator._active_refresh_triggers
+            ),
+            "last_refresh_triggers": sorted(
+                trigger.value for trigger in coordinator._last_refresh_triggers
+            ),
+            "refresh_generation": coordinator._pending_refreshes.generation,
+            "active_refresh_generation": coordinator._active_refresh_generation,
             "unloading": coordinator._unloading,
             "diagnostic_refresh": coordinator._diagnostic_refresh,
         },
         "schedule": {
             "now_local": dt_util.now(),
             "adaptive_time_ok": bool(coordinator.check_adaptive_time),
-            "adaptive_movement_allowed": bool(
-                coordinator.adaptive_movement_allowed
-            ),
+            "adaptive_movement_allowed": bool(coordinator.adaptive_movement_allowed),
             "start_time": coordinator._start_time,
             "end_time": coordinator._end_time,
             "scheduled_end_time": coordinator._scheduled_time,
             "sun_start_time": coordinator._sun_start_time,
             "sun_end_time": coordinator._sun_end_time,
-            "night_purge_active": getattr(
-                coordinator.last_decision, "code", None
-            )
+            "night_purge_active": getattr(coordinator.last_decision, "code", None)
             == "night_purge",
             "night_purge_next_close": coordinator._night_purge_scheduled_time,
+            "start_time_resolution": (
+                {
+                    "source": coordinator._last_start_time_resolution.source,
+                    "raw_value": coordinator._last_start_time_resolution.raw_value,
+                    "fallback_reason": (
+                        coordinator._last_start_time_resolution.fallback_reason
+                    ),
+                }
+                if coordinator._last_start_time_resolution
+                else None
+            ),
+            "end_time_resolution": (
+                {
+                    "source": coordinator._last_end_time_resolution.source,
+                    "raw_value": coordinator._last_end_time_resolution.raw_value,
+                    "fallback_reason": (
+                        coordinator._last_end_time_resolution.fallback_reason
+                    ),
+                }
+                if coordinator._last_end_time_resolution
+                else None
+            ),
         },
         "forecast_cache": {
             "entity": coordinator._forecast_entity,
@@ -375,8 +423,9 @@ def _coordinator_runtime(coordinator: AdaptiveDataUpdateCoordinator | None) -> d
             "states": getattr(data, "states", {}),
             "attributes": getattr(data, "attributes", {}),
         },
-        "wait_for_target": coordinator.wait_for_target,
-        "target_call": coordinator.target_call,
+        "wait_for_target": coordinator.movement.wait_for_target,
+        "target_call": coordinator.movement.target_call,
+        "last_command_at": coordinator.movement.last_command_at,
         "verify_tasks": _task_diagnostics(coordinator),
         "decision_history": list(coordinator.decision_history),
         "manager": {
@@ -579,7 +628,9 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:  # noqa: C901
 
             if matched_data:
                 new_data = dict(matched_data.get("data", entry.data))
-                new_options = _normalize_options(matched_data.get("options", entry.options))
+                new_options = _normalize_options(
+                    matched_data.get("options", entry.options)
+                )
                 if dict(entry.data) != new_data or dict(entry.options) != new_options:
                     hass.config_entries.async_update_entry(
                         entry,
@@ -590,7 +641,10 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:  # noqa: C901
         current_entry_ids = {entry.entry_id for entry in current_entries}
         current_titles = {entry.title for entry in current_entries}
         for stored_id, stored_data in stored_entries.items():
-            if stored_id not in current_entry_ids and stored_data.get("title") not in current_titles:
+            if (
+                stored_id not in current_entry_ids
+                and stored_data.get("title") not in current_titles
+            ):
                 _LOGGER.warning(
                     "Skipped Adaptive Cover backup entry %s (%s): no matching config entry",
                     stored_id,
@@ -656,33 +710,46 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:  # noqa: C901
         DOMAIN,
         "export_config",
         export_config,
-        schema=vol.Schema({
-            vol.Optional("filename", default="adaptive_cover_settings.json"): cv.string,
-            vol.Optional("include_date", default=True): cv.boolean,
-        })
+        schema=vol.Schema(
+            {
+                vol.Optional(
+                    "filename", default="adaptive_cover_settings.json"
+                ): cv.string,
+                vol.Optional("include_date", default=True): cv.boolean,
+            }
+        ),
     )
 
     hass.services.async_register(
         DOMAIN,
         "import_config",
         import_config,
-        schema=vol.Schema({
-            vol.Optional("filename", default="adaptive_cover_settings.json"): cv.string,
-        })
+        schema=vol.Schema(
+            {
+                vol.Optional(
+                    "filename", default="adaptive_cover_settings.json"
+                ): cv.string,
+            }
+        ),
     )
 
     hass.services.async_register(
         DOMAIN,
         "export_diagnostics",
         export_diagnostics,
-        schema=vol.Schema({
-            vol.Optional("filename", default="adaptive_cover_diagnostics.json"): cv.string,
-            vol.Optional("include_date", default=True): cv.boolean,
-            vol.Optional("refresh", default=True): cv.boolean,
-        })
+        schema=vol.Schema(
+            {
+                vol.Optional(
+                    "filename", default="adaptive_cover_diagnostics.json"
+                ): cv.string,
+                vol.Optional("include_date", default=True): cv.boolean,
+                vol.Optional("refresh", default=True): cv.boolean,
+            }
+        ),
     )
 
     return True
+
 
 async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Migrate legacy entries to complete, validated option schema version 2."""
@@ -783,21 +850,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
-    if hass.state == CoreState.running:
+    async def _runtime_startup_complete(_hass: HomeAssistant) -> None:
         coordinator.schedule_runtime_initialization()
-    else:
-        def _runtime_startup_complete(_event) -> None:
-            coordinator.schedule_runtime_initialization()
 
-        entry.async_on_unload(
-            hass.bus.async_listen_once(
-                EVENT_HOMEASSISTANT_STARTED,
-                _runtime_startup_complete,
-            )
-        )
+    entry.async_on_unload(async_at_started(hass, _runtime_startup_complete))
 
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
     return True
+
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
@@ -810,8 +870,3 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Handle options update."""
     await hass.config_entries.async_reload(entry.entry_id)
-
-
-# Home Assistant discovers diagnostics during startup. Importing it here ensures
-# the loader does not perform its first disk import from inside the event loop.
-from . import diagnostics as diagnostics  # noqa: E402

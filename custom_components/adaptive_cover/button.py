@@ -13,6 +13,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import _LOGGER, CONF_ENTITIES, CONF_SENSOR_TYPE, DOMAIN
 from .coordinator import AdaptiveDataUpdateCoordinator
+from .options import normalize_options
 
 
 async def async_setup_entry(
@@ -25,16 +26,14 @@ async def async_setup_entry(
         config_entry.entry_id
     ]
 
-    reset_manual = AdaptiveCoverButton(
-        config_entry, config_entry.entry_id, coordinator
-    )
+    reset_manual = AdaptiveCoverButton(config_entry, config_entry.entry_id, coordinator)
     reset_learning = AdaptiveCoverLearningResetButton(
         config_entry, config_entry.entry_id, coordinator
     )
 
     buttons = []
 
-    entities = config_entry.options.get(CONF_ENTITIES, [])
+    entities = normalize_options(config_entry.options)[CONF_ENTITIES]
     if len(entities) >= 1:
         buttons = [reset_manual, reset_learning]
 
@@ -68,7 +67,7 @@ class AdaptiveCoverButton(
         self._attr_unique_id = f"{unique_id}_Reset Manual Override"
         self._attr_translation_key = "reset_manual"
         self._device_id = unique_id
-        self._entities = config_entry.options.get(CONF_ENTITIES, [])
+        self._entities = normalize_options(config_entry.options)[CONF_ENTITIES]
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, self._device_id)},
             name=self._name,
@@ -80,19 +79,36 @@ class AdaptiveCoverButton(
         for entity in self._entities:
             if self.coordinator.manager.is_cover_manual(entity):
                 _LOGGER.debug("Resetting manual override for: %s", entity)
-                await self.coordinator.async_set_position(
+                target = self.coordinator._target_for_entity(
                     entity,
-                    self.coordinator._target_for_entity(
-                        entity, self.coordinator.state
-                    ),
+                    self.coordinator.state,
                 )
+                accepted = await self.coordinator.async_set_position(
+                    entity,
+                    target,
+                )
+                if not accepted:
+                    self.coordinator.logger.warning(
+                        "Nie udało się rozpocząć resetu sterowania ręcznego dla %s",
+                        entity,
+                    )
+                    continue
                 try:
                     async with asyncio.timeout(120):
-                        while self.coordinator.wait_for_target.get(entity):
+                        while self.coordinator.movement.is_waiting(entity):
                             await asyncio.sleep(1)
                 except TimeoutError:
                     self.coordinator.logger.warning(
                         "Timed out while resetting manual override for %s", entity
+                    )
+                    continue
+                current = self.coordinator._get_current_position(entity)
+                if current is None or self.coordinator.check_position(entity, target):
+                    self.coordinator.logger.warning(
+                        "Nie resetuję sterowania ręcznego dla %s: pozycja docelowa "
+                        "%s nie została potwierdzona",
+                        entity,
+                        target,
                     )
                     continue
                 self.coordinator.manager.reset(entity)

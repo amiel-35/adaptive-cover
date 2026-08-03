@@ -158,6 +158,7 @@
           "irradiance_threshold": "Threshold for irradiance sensor, above this value glare should be reduced",
           "irradiance_threshold_on": "Upper threshold used to leave low-radiation mode",
           "irradiance_threshold_off": "Lower threshold used to enter low-radiation mode",
+          "outside_threshold": "Minimum outside temperature that permits summer cooling mode",
           "rain_entity": "Select a dedicated rain sensor (takes priority over weather entity data)",
           "wind_entity": "Select a dedicated wind sensor in km/h (takes priority over weather entity data)",
           "rain_position": "Position used when rain protection is active",
@@ -448,6 +449,7 @@
           "irradiance_threshold": "Threshold for irradiance sensor, above this value glare should be reduced",
           "irradiance_threshold_on": "Upper threshold used to leave low-radiation mode",
           "irradiance_threshold_off": "Lower threshold used to enter low-radiation mode",
+          "outside_threshold": "Minimum outside temperature that permits summer cooling mode",
           "rain_entity": "Select a dedicated rain sensor (takes priority over weather entity data)",
           "wind_entity": "Select a dedicated wind sensor in km/h (takes priority over weather entity data)",
           "rain_position": "Position used when rain protection is active",
@@ -618,6 +620,9 @@
   },
   "entity": {
     "time": {
+      "start_time": {
+        "name": "Opening Time (Every Day)"
+      },
       "start_time_workday": {
         "name": "Opening Time (Workdays)"
       },
@@ -658,9 +663,6 @@
         "name": "Control Method"
       },
       "algorithm_status": {
-        "schedule": {
-          "name": "Today's Schedule"
-        },
         "name": "Algorithm Status",
         "state": {
           "auto": "Auto (Sun/Climate)",

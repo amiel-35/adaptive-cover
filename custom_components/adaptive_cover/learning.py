@@ -10,6 +10,8 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.storage import Store
 
 STORAGE_VERSION = 1
+LEARNING_GUARD_VERSION = 4
+LEARNING_GUARD_RESET_REASON = "temperature_source_guard_upgrade"
 POSITION_BIAS_LIMIT = 25.0
 TEMPERATURE_OFFSET_LIMIT = 3.0
 
@@ -31,6 +33,8 @@ class BehavioralLearner:
         self.last_override: dict[str, Any] | None = None
         self.last_save_scheduled_at: datetime | None = None
         self.last_direct_sun_at: datetime | None = None
+        self.last_guard_reset_at: datetime | None = None
+        self.guard_reset_reason: str | None = None
         self._last_direct_sun_saved_at: datetime | None = None
         self._store = Store(
             hass,
@@ -47,18 +51,44 @@ class BehavioralLearner:
             self.logger.error("Unable to load behavioral learning: %s", err)
             return
         try:
-            self.position_biases = {
+            stored_biases = {
                 str(key): float(value)
                 for key, value in data.get("position_biases", {}).items()
             }
-            self.temperature_offsets = {
+            stored_offsets = {
                 str(key): float(value)
                 for key, value in data.get("temperature_offsets", {}).items()
             }
-            self.override_counts = {
+            stored_counts = {
                 str(key): int(value)
                 for key, value in data.get("override_counts", {}).items()
             }
+            guard_version = int(data.get("learning_guard_version", 0))
+            guard_upgrade = guard_version < LEARNING_GUARD_VERSION
+            if guard_upgrade:
+                self.position_biases = {}
+                self.temperature_offsets = {}
+                self.override_counts = {}
+                if stored_biases or stored_offsets or stored_counts:
+                    self.last_guard_reset_at = datetime.now(UTC)
+                    self.guard_reset_reason = LEARNING_GUARD_RESET_REASON
+                    self.logger.warning(
+                        "Resetting behavioral learning affected by legacy movement "
+                        "or invalid temperature-source detection"
+                    )
+            else:
+                self.position_biases = stored_biases
+                self.temperature_offsets = stored_offsets
+                self.override_counts = stored_counts
+                self.guard_reset_reason = data.get("last_guard_reset_reason")
+                stored_reset = data.get("last_guard_reset_at")
+                self.last_guard_reset_at = (
+                    datetime.fromisoformat(stored_reset) if stored_reset else None
+                )
+                if self.last_guard_reset_at and self.last_guard_reset_at.tzinfo is None:
+                    self.last_guard_reset_at = self.last_guard_reset_at.replace(
+                        tzinfo=UTC
+                    )
             stored_sun = data.get("last_direct_sun_at")
             self.last_direct_sun_at = (
                 datetime.fromisoformat(stored_sun) if stored_sun else None
@@ -69,6 +99,15 @@ class BehavioralLearner:
             self.loaded = True
             self.last_load_at = datetime.now(UTC)
             self.last_load_error = None
+            if guard_upgrade:
+                try:
+                    await self._store.async_save(self._storage_payload())
+                except (HomeAssistantError, OSError) as err:
+                    self.last_load_error = str(err)
+                    self.logger.error(
+                        "Unable to persist behavioral learning guard upgrade: %s",
+                        err,
+                    )
         except (AttributeError, TypeError, ValueError) as err:
             self.last_load_error = str(err)
             self.logger.error("Invalid behavioral learning storage; using defaults")
@@ -76,6 +115,7 @@ class BehavioralLearner:
             self.temperature_offsets.clear()
             self.override_counts.clear()
             self.last_direct_sun_at = None
+            self.last_guard_reset_at = None
             self._last_direct_sun_saved_at = None
 
     def remember_direct_sun(self, timestamp: datetime, *, force: bool = False) -> None:
@@ -164,6 +204,7 @@ class BehavioralLearner:
     def _storage_payload(self) -> dict[str, Any]:
         """Return only values which must survive a restart."""
         return {
+            "learning_guard_version": LEARNING_GUARD_VERSION,
             "position_biases": dict(self.position_biases),
             "temperature_offsets": dict(self.temperature_offsets),
             "override_counts": dict(self.override_counts),
@@ -172,6 +213,12 @@ class BehavioralLearner:
                 if self.last_direct_sun_at is not None
                 else None
             ),
+            "last_guard_reset_at": (
+                self.last_guard_reset_at.isoformat()
+                if self.last_guard_reset_at is not None
+                else None
+            ),
+            "last_guard_reset_reason": self.guard_reset_reason,
         }
 
     def diagnostics(self) -> dict[str, Any]:
@@ -182,6 +229,7 @@ class BehavioralLearner:
             "last_load_error": self.last_load_error,
             "last_override": self.last_override,
             "last_save_scheduled_at": self.last_save_scheduled_at,
+            "guard_reset_reason": self.guard_reset_reason,
         }
 
     def _schedule_save(self) -> None:

@@ -16,6 +16,7 @@ class FakeStore:
         """Capture storage metadata without file-system access."""
         self.data = None
         self.delayed_payload = None
+        self.saved_payload = None
 
     async def async_load(self):
         """Return the configured in-memory payload."""
@@ -24,6 +25,10 @@ class FakeStore:
     def async_delay_save(self, callback, delay) -> None:
         """Capture the payload that would be persisted by Home Assistant."""
         self.delayed_payload = callback()
+
+    async def async_save(self, payload) -> None:
+        """Przechwyć natychmiastowy zapis migracji danych."""
+        self.saved_payload = payload
 
 
 homeassistant = ModuleType("homeassistant")
@@ -43,14 +48,12 @@ sys.modules.setdefault("homeassistant.helpers", homeassistant_helpers)
 sys.modules.setdefault("homeassistant.helpers.storage", homeassistant_storage)
 
 MODULE_PATH = (
-    Path(__file__).parents[1]
-    / "custom_components"
-    / "adaptive_cover"
-    / "learning.py"
+    Path(__file__).parents[1] / "custom_components" / "adaptive_cover" / "learning.py"
 )
 SPEC = importlib.util.spec_from_file_location("adaptive_cover_learning", MODULE_PATH)
 learning = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(learning)
+learning.Store = FakeStore
 
 
 class BehavioralLearnerTests(unittest.IsolatedAsyncioTestCase):
@@ -60,6 +63,7 @@ class BehavioralLearnerTests(unittest.IsolatedAsyncioTestCase):
         """Restore valid persisted learning values."""
         learner = learning.BehavioralLearner(object(), Mock(), "entry")
         learner._store.data = {
+            "learning_guard_version": learning.LEARNING_GUARD_VERSION,
             "position_biases": {"cover.room": 4.5},
             "temperature_offsets": {"cover.room": -0.3},
             "override_counts": {"cover.room": 3},
@@ -75,13 +79,44 @@ class BehavioralLearnerTests(unittest.IsolatedAsyncioTestCase):
             learner.last_direct_sun_at,
         )
 
+    async def test_legacy_learning_is_reset_but_direct_sun_is_retained(self) -> None:
+        """Usuń korekty skażone dawnym wykrywaniem własnych ruchów."""
+        learner = learning.BehavioralLearner(object(), Mock(), "entry")
+        learner._store.data = {
+            "learning_guard_version": 3,
+            "position_biases": {"cover.room": -19.0},
+            "temperature_offsets": {"cover.room": -3.0},
+            "override_counts": {"cover.room": 196},
+            "last_direct_sun_at": "2026-07-29T11:43:56+00:00",
+        }
+
+        await learner.async_load()
+
+        self.assertEqual(50, learner.get_adjusted_position("cover.room", 50))
+        self.assertEqual(0.0, learner.get_temp_offset("cover.room"))
+        self.assertEqual(
+            learning.LEARNING_GUARD_RESET_REASON,
+            learner.diagnostics()["guard_reset_reason"],
+        )
+        self.assertEqual(
+            learning.LEARNING_GUARD_VERSION,
+            learner._store.saved_payload["learning_guard_version"],
+        )
+        self.assertEqual({}, learner._store.saved_payload["position_biases"])
+        self.assertEqual(
+            "2026-07-29T11:43:56+00:00",
+            learner._store.saved_payload["last_direct_sun_at"],
+        )
+
     async def test_override_updates_and_schedules_persistence(self) -> None:
         """Learn bounded position and temperature preferences."""
         learner = learning.BehavioralLearner(object(), Mock(), "entry")
         learner.register_override("cover.room", 23.0, 50, 30, True)
         self.assertEqual(48, learner.get_adjusted_position("cover.room", 50))
         self.assertEqual(-0.1, learner.get_temp_offset("cover.room"))
-        self.assertEqual(1, learner._store.delayed_payload["override_counts"]["cover.room"])
+        self.assertEqual(
+            1, learner._store.delayed_payload["override_counts"]["cover.room"]
+        )
         self.assertEqual(
             30,
             learner.diagnostics()["last_override"]["manual_position"],
@@ -107,9 +142,7 @@ class BehavioralLearnerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(learner._store.delayed_payload)
         learner.remember_direct_sun(first + timedelta(minutes=5), force=True)
         self.assertIsNotNone(learner._store.delayed_payload)
-        self.assertEqual(
-            first.isoformat(), first_payload["last_direct_sun_at"]
-        )
+        self.assertEqual(first.isoformat(), first_payload["last_direct_sun_at"])
 
 
 if __name__ == "__main__":

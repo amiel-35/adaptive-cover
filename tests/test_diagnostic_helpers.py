@@ -70,5 +70,19 @@ class PositionDiagnosticsTests(unittest.TestCase):
         self.assertIsNone(result["target_satisfied"])
 
 
+class EntityAvailabilityTests(unittest.TestCase):
+    """Sprawdzaj prawdziwą dostępność wejść pokazywaną w eksporcie."""
+
+    def test_unavailable_and_unknown_states_are_not_available(self) -> None:
+        """Stany techniczne nie mogą być oznaczone jako dostępne."""
+        self.assertFalse(helpers.entity_state_available("unavailable"))
+        self.assertFalse(helpers.entity_state_available("unknown"))
+        self.assertFalse(helpers.entity_state_available(None))
+
+    def test_regular_state_is_available(self) -> None:
+        """Poprawna wartość encji pozostaje dostępna."""
+        self.assertTrue(helpers.entity_state_available("24.2"))
+
+
 if __name__ == "__main__":
     unittest.main()

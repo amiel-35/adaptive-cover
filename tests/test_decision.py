@@ -5,12 +5,10 @@ import importlib.util
 from pathlib import Path
 import sys
 import unittest
+from zoneinfo import ZoneInfo
 
 MODULE_PATH = (
-    Path(__file__).parents[1]
-    / "custom_components"
-    / "adaptive_cover"
-    / "decision.py"
+    Path(__file__).parents[1] / "custom_components" / "adaptive_cover" / "decision.py"
 )
 SPEC = importlib.util.spec_from_file_location("adaptive_cover_decision", MODULE_PATH)
 decision = importlib.util.module_from_spec(SPEC)
@@ -43,9 +41,7 @@ class NightPurgeTests(unittest.TestCase):
         """Exclude ordinary daytime before the next sunset."""
         now = datetime(2026, 7, 11, 12, 0, tzinfo=UTC)
         sunset = datetime(2026, 7, 11, 20, 0, tzinfo=UTC)
-        self.assertFalse(
-            decision.is_night_purge_window_active(now, sunset, time(6, 0))
-        )
+        self.assertFalse(decision.is_night_purge_window_active(now, sunset, time(6, 0)))
 
     def test_daytime_deadline_before_sunset_does_not_activate_all_day(self) -> None:
         """Treat a deadline such as 18:00 as inactive before a later sunset."""
@@ -59,8 +55,71 @@ class NightPurgeTests(unittest.TestCase):
         """Allow a valid same-evening deadline later than sunset."""
         now = datetime(2026, 12, 1, 21, 0, tzinfo=UTC)
         sunset = datetime(2026, 12, 1, 16, 0, tzinfo=UTC)
+        self.assertTrue(decision.is_night_purge_window_active(now, sunset, time(22, 0)))
+
+    def test_utc_sunset_is_converted_to_local_time_before_purge(self) -> None:
+        """Nie uruchamiaj przewietrzania dwie godziny za wcześnie latem."""
+        warsaw = ZoneInfo("Europe/Warsaw")
+        sunset_utc = datetime(2026, 8, 2, 18, 17, 35, tzinfo=UTC)
+
+        self.assertFalse(
+            decision.is_night_purge_window_active(
+                datetime(2026, 8, 2, 20, 3, tzinfo=warsaw),
+                sunset_utc,
+                time(6, 0),
+            )
+        )
         self.assertTrue(
-            decision.is_night_purge_window_active(now, sunset, time(22, 0))
+            decision.is_night_purge_window_active(
+                datetime(2026, 8, 2, 20, 18, tzinfo=warsaw),
+                sunset_utc,
+                time(6, 0),
+            )
+        )
+
+
+class ColdProtectionTests(unittest.TestCase):
+    """Sprawdzaj stabilne przełączanie ochrony przed chłodem."""
+
+    def test_protection_activates_below_configured_threshold(self) -> None:
+        """Aktywuj ochronę dopiero po zejściu poniżej progu."""
+        self.assertTrue(
+            decision.resolve_cold_protection(
+                outside_temperature=15.9,
+                threshold=16.0,
+                night_active=True,
+                previous_active=False,
+            )
+        )
+
+    def test_active_protection_uses_one_degree_release_hysteresis(self) -> None:
+        """Nie przełączaj rolet przy drobnych wahaniach wokół 16°C."""
+        self.assertTrue(
+            decision.resolve_cold_protection(
+                outside_temperature=16.4,
+                threshold=16.0,
+                night_active=True,
+                previous_active=True,
+            )
+        )
+        self.assertFalse(
+            decision.resolve_cold_protection(
+                outside_temperature=17.0,
+                threshold=16.0,
+                night_active=True,
+                previous_active=True,
+            )
+        )
+
+    def test_protection_is_released_outside_night(self) -> None:
+        """Stan z poprzedniej nocy nie może przejść na dzień."""
+        self.assertFalse(
+            decision.resolve_cold_protection(
+                outside_temperature=10.0,
+                threshold=16.0,
+                night_active=False,
+                previous_active=True,
+            )
         )
 
 
@@ -145,9 +204,7 @@ class NumericSignalTests(unittest.TestCase):
     def test_missing_irradiance_is_not_strong_sun(self) -> None:
         """Treat startup null values as unavailable, not above threshold."""
         self.assertFalse(decision.numeric_value_above_threshold(None, 300))
-        self.assertFalse(
-            decision.numeric_value_above_threshold("unavailable", 300)
-        )
+        self.assertFalse(decision.numeric_value_above_threshold("unavailable", 300))
 
     def test_irradiance_must_exceed_threshold(self) -> None:
         """Use the actual numeric reading for Strict Sun Block."""
@@ -181,6 +238,94 @@ class DecisionResultTests(unittest.TestCase):
         self.assertIn("thermal_hold", decision.LEARNABLE_DECISION_CODES)
         self.assertNotIn("rain_detected", decision.LEARNABLE_DECISION_CODES)
         self.assertIn("rain_detected", decision.EMERGENCY_DECISION_CODES)
+
+    def test_behavioral_learning_requires_active_adaptive_schedule(self) -> None:
+        """Ruch przed startem harmonogramu nie może zmieniać preferencji."""
+        self.assertFalse(
+            decision.behavioral_learning_allowed(
+                "auto",
+                adaptive_movement_allowed=False,
+            )
+        )
+        self.assertTrue(
+            decision.behavioral_learning_allowed(
+                "auto",
+                adaptive_movement_allowed=True,
+            )
+        )
+        self.assertFalse(
+            decision.behavioral_learning_allowed(
+                "rain_detected",
+                adaptive_movement_allowed=True,
+            )
+        )
+
+    def test_arbiter_selects_highest_priority_from_full_matrix(self) -> None:
+        """Kolejność listy nie może zmienić jawnego priorytetu reguł."""
+        codes = [
+            "auto",
+            "sun_shadow",
+            "night_mode",
+            "thermal_hold",
+            "night_purge",
+            "strict_sun_block",
+            "dawn_protection",
+            "cold_protection",
+            "wind_detected",
+            "window_open",
+            "control_disabled",
+        ]
+        candidates = [
+            decision.DecisionResult(
+                target_position=index,
+                code=code,
+                reason=code,
+                priority=decision.decision_priority(code),
+            )
+            for index, code in enumerate(codes)
+        ]
+
+        selected = decision.DecisionArbiter.select(candidates)
+
+        self.assertEqual("control_disabled", selected.code)
+
+    def test_window_policy_is_selected_by_same_arbiter(self) -> None:
+        """Otwarte okno ma jawnie nadpisać decyzję komfortową i jej cel."""
+        base = decision.DecisionResult(
+            40,
+            "auto",
+            "Komfort",
+            decision.decision_priority("auto"),
+        )
+
+        selected, trace = decision.apply_runtime_policies(
+            base,
+            control_enabled=True,
+            window_open=True,
+            window_action="move_to_position",
+            window_position=100,
+        )
+
+        self.assertEqual("window_open", selected.code)
+        self.assertEqual(100, selected.target_position)
+        self.assertTrue(
+            any(item["code"] == "window_open" and item["selected"] for item in trace)
+        )
+
+    def test_timed_end_is_between_safety_and_comfort(self) -> None:
+        """Koniec harmonogramu zamyka komfort, ale nie nadpisuje ochrony."""
+        self.assertGreater(
+            decision.decision_priority("strict_sun_block"),
+            decision.decision_priority("timed_end"),
+        )
+        self.assertGreater(
+            decision.decision_priority("timed_end"),
+            decision.decision_priority("thermal_hold"),
+        )
+        self.assertEqual(
+            decision.decision_priority("timed_end"),
+            decision.decision_priority("night_purge_end"),
+        )
 
 
 if __name__ == "__main__":

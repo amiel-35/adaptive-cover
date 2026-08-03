@@ -1,4 +1,4 @@
-# Adaptive Cover rako Edition 1.5.4
+# Adaptive Cover rako Edition 1.6.0
 
 [Polski](#polski) | [English](#english)
 
@@ -44,8 +44,8 @@ and available in diagnostics schema v4.
 
 ## Wymagania
 
-- Home Assistant `2023.11.1` lub nowszy.
-- Python `3.11` lub nowszy po stronie Home Assistant.
+- Home Assistant `2026.7.0` lub nowszy z gałęzi `2026.x`.
+- Python `3.14.2` lub nowszy z gałęzi `3.14` po stronie Home Assistant.
 - Fizyczna encja `cover` obsługująca ustawianie pozycji albo pozycji uchyłu.
 - Poprawnie skonfigurowana lokalizacja i strefa czasowa Home Assistant.
 
@@ -129,11 +129,12 @@ niższą decyzję komfortową.
 | 110 | Wyłączone sterowanie | oblicza cel, ale nie wykonuje ruchu |
 | 105 | Otwarte okno | stosuje wybraną politykę bezpieczeństwa |
 | 100 | Deszcz / silny wiatr | ustawia skonfigurowaną pozycję awaryjną |
+| 98 | Minimalna / maksymalna pozycja | nakłada fizyczne ograniczenia pozycji |
 | 95 | Ochrona przed zimnem | zamyka osłonę nocą poniżej progu temperatury |
 | 90 | Ochrona przed świtem | ogranicza wczesne światło w wybranych miesiącach |
 | 85 | Strict Sun Block | blokuje bezpośrednie silne słońce w oknie |
 | 80 | Nocne przewietrzanie | uchyla roletę do skonfigurowanej pozycji |
-| 75 | Minimalna / maksymalna pozycja | nakłada fizyczne ograniczenia pozycji |
+| 70 | Koniec harmonogramu / przewietrzania | przywraca skonfigurowaną pozycję nocną |
 | 60 | Thermal Hold | czasowo utrzymuje ochronę po bezpośrednim słońcu |
 | 50 | Tryb nocny | używa pozycji po zachodzie |
 | 40 | Okno w cieniu | wraca do pozycji domyślnej |
@@ -143,6 +144,19 @@ Diagnostyka zawiera `decision_trace`, który pokazuje reguły aktywne, wybraną
 regułę oraz reguły nadpisane wyższym priorytetem.
 
 ## Funkcje klimatyczne
+
+### Słabe promieniowanie
+
+W trybie klimatycznym bieżący sygnał lux lub irradiancji ma pierwszeństwo przed
+samą prognozą. Jeżeli `low_light=true` i `thermal_stress=0`, integracja ustawia
+pozycję domyślną, nawet gdy prognoza temperatury oznaczyła dzień jako letni.
+Dodatni stres termiczny nadal utrzymuje ochronę, na przykład gdy powietrze
+zewnętrzne jest gorętsze od wnętrza.
+
+Jeżeli skonfigurowany czujnik temperatury pomieszczenia jest niedostępny,
+integracja nie zastępuje go temperaturą zewnętrzną. Ochrona termiczna pozostaje
+nieaktywna do odzyskania wiarygodnego pomiaru wewnętrznego, a diagnostyka
+pokazuje `temperature_source=inside_unavailable`.
 
 ### Nocne przewietrzanie
 
@@ -154,6 +168,12 @@ przed rozpoczęciem harmonogramu dziennego, powoduje natychmiastowe nadrobienie
 pominiętego zamknięcia.
 
 Ochrona przed zimnem, deszczem i wiatrem ma wyższy priorytet niż przewietrzanie.
+Ochrona przed zimnem ma histerezę `1°C`: po aktywacji poniżej progu pozostaje
+włączona do czasu, aż temperatura zewnętrzna osiągnie próg powiększony o `1°C`.
+Duży skok czujnika temperatury zewnętrznej, przekraczający `3°C`, musi utrzymać
+się przez pięć minut. Krótszy skok jest odrzucany przed oceną ochrony zimna i
+nocnego przewietrzania. Diagnostyka pokazuje wartość surową, zaakceptowaną,
+kandydata oraz liczbę odrzuconych odczytów.
 
 ### Podtrzymanie ochrony termicznej
 
@@ -177,7 +197,8 @@ rzeczywiście wystawione na bezpośrednie słońce. Ochrona zostaje zwolniona:
 Strict Sun Block wymaga aktualnego numerycznego odczytu irradiancji lub lux
 większego od progu włączenia. Stan `unknown`, `unavailable` albo brak odczytu nie
 jest traktowany jako silne słońce. Podczas uruchamiania Home Assistant integracja
-czeka na stabilizację encji i dopiero potem może wysłać pierwsze polecenie.
+korzysta z `async_at_started`, czeka na stabilizację encji i dopiero potem może
+wysłać pierwsze polecenie. Ten sam mechanizm działa przy przeładowaniu integracji.
 
 ## Otwarte okno lub drzwi
 
@@ -195,6 +216,9 @@ Obsługiwane polityki `window_open_action`:
 Integracja odróżnia własne polecenia od ruchów użytkownika. Po wykryciu ręcznej
 zmiany dana roleta pozostaje poza automatyką przez wybrany czas. Dostępne czasy
 to: brak, 15, 30, 60, 120, 240 minut albo do zachodu słońca.
+Raporty pozycji odebrane przez dwie minuty po wysłaniu polecenia są przypisywane
+do ruchu automatyki. Po osiągnięciu celu powtórzony raport jest porównywany z
+ostatnią fizycznie zadaną pozycją, a nie z kolejną kalkulacją.
 
 `manual_ignore_intermediate` pozwala ignorować przejściowe stany `opening` i
 `closing`. Przycisk resetu ręcznego sterowania przywraca aktualny bezpieczny cel
@@ -213,11 +237,15 @@ Store. Po potwierdzonej ręcznej zmianie aktualizuje:
 - korektę temperatury komfortu ograniczoną do `-3...+3°C`,
 - licznik ręcznych korekt.
 
-Uczenie wpływa wyłącznie na decyzje komfortowe. Nie może zmienić pozycji
-bezpieczeństwa wynikających z deszczu, wiatru, zimna ani Strict Sun Block.
+Uczenie działa wyłącznie podczas aktywnego harmonogramu i tylko dla decyzji
+komfortowych. Nie może zmienić pozycji bezpieczeństwa wynikających z deszczu,
+wiatru, zimna ani Strict Sun Block.
 Przycisk **Reset Behavioral Learning** usuwa wszystkie wyuczone korekty wpisu.
 Znacznik ostatniego bezpośredniego słońca jest zapisywany oddzielnie i przetrwa
 restart Home Assistant, dzięki czemu Thermal Hold nie traci kontekstu.
+Aktualizacja mechanizmu rozpoznawania ruchu i harmonogramu jednorazowo zeruje
+starsze korekty, które mogły powstać z raportów pośrednich napędu lub ruchów
+spoza czasu automatyki. Znacznik słońca nie jest przy tym usuwany.
 
 ## Harmonogram i źródła czasu
 
@@ -226,9 +254,10 @@ przy skonfigurowanej encji Workday, a następnie uniwersalne `start_time`.
 Niedostępna encja Workday nie jest uznawana za dzień wolny.
 
 Godzina zakończenia ma kolejność: encja końca, jawne `end_time`, a dopiero potem
-zachód słońca z `close_sunset_offset`. Encja przesunięcia zachodu jest tworzona
-tylko dla zamknięcia solarnego. Zmiana terminu na wcześniejszy oraz termin
-pominięty podczas restartu są obsługiwane przy najbliższym odświeżeniu.
+zachód słońca z `close_sunset_offset`. Encja przesunięcia zachodu jest zawsze
+dostępna, także po zmianie źródła czasu. Jej wartość wpływa na harmonogram tylko
+przy zamknięciu solarnym. Zmiana terminu na wcześniejszy oraz termin pominięty
+podczas restartu są obsługiwane przy najbliższym odświeżeniu.
 
 ## Ochrona silnika i retry
 
@@ -337,10 +366,11 @@ schematu. Zawierają:
 - aktualną decyzję i maksymalnie 50 ostatnich decyzji,
 - ślad priorytetów `decision_trace`,
 - aktualne pozycje, błąd pozycji, tolerancję i `target_satisfied`,
-- ostatnie polecenia, błędy usług i historię ruchów,
+- ostatnie polecenia, ich czas, błędy usług i historię ruchów,
 - stan i terminy zadań retry,
 - zdrowie koordynatora i czas odświeżeń,
-- harmonogram, cache prognozy i stan nocnego przewietrzania,
+- harmonogram, cache prognozy, `low_light`, tryb sezonowy, stan nocnego
+  przewietrzania i progi ochrony zimna,
 - stany i świeżość wszystkich powiązanych encji,
 - stan odczytu i zapisu BehavioralLearner.
 
@@ -366,13 +396,40 @@ mniejsza od skonfigurowanego progu i kolejne polecenie nie jest potrzebne.
 
 ```powershell
 .\.venv\Scripts\ruff.exe check --no-cache custom_components\adaptive_cover tests
-.\.venv\Scripts\python.exe -m unittest discover -s tests -v
+.\.venv\Scripts\ruff.exe format --check custom_components\adaptive_cover tests
+.\.venv\Scripts\python.exe tests\run_pytest.py -q
 .\.venv\Scripts\python.exe -m compileall -q custom_components\adaptive_cover tests
 ```
 
 Blueprinty w `custom_components/adaptive_cover/blueprints` są rozwiązaniem
 legacy przeznaczonym wyłącznie dla dodatkowych osłon. Nie należy nimi ponownie
 sterować roletami przypisanymi bezpośrednio do integracji.
+
+## Architektura 1.6
+
+Każde odświeżenie przechodzi przez jeden przepływ:
+
+`zdarzenie/timer -> snapshot wejść -> kandydaci -> arbiter -> limity i polityki runtime -> movement.py -> usługa cover`
+
+- `coordinator.py` składa zależności, a `coordinator_pipeline.py` prowadzi
+  krótkie fazy pojedynczego cyklu aktualizacji.
+- `coordinator_events.py` przechowuje przyczyny odświeżeń oraz zarządza
+  zdarzeniami i timerami.
+- `coordinator_data.py` pobiera wartości HA raz i buduje snapshot wejść.
+- `geometry.py` oblicza geometrię, a `climate.py` tworzy kandydatów bez
+  bezpośredniego odczytywania `hass.states`.
+- `decision.py` jest wspólnym arbitrem priorytetów, śladu decyzji i fizycznych
+  ograniczeń pozycji.
+- `coordinator_execution.py` stosuje polityki wykonawcze.
+- `movement.py` jest jedyną bramką wywołań usług domeny `cover`, weryfikacji i
+  retry.
+- `manual_control.py`, `learning.py`, `schedule.py`, `models.py` i `options.py`
+  utrzymują niezależne polityki domenowe.
+
+Nowsze zdarzenie otrzymuje rosnącą generację. Jeżeli pojawi się podczas
+sterowania grupą rolet, pozostałe stare cele są pomijane, a kolejny cykl
+oblicza aktualną decyzję. Timer końca nocnego wietrzenia nie ustawia pozycji
+bezpośrednio.
 
 ---
 
@@ -398,8 +455,8 @@ sterować roletami przypisanymi bezpośrednio do integracji.
 
 ## Requirements
 
-- Home Assistant `2023.11.1` or newer.
-- Python `3.11` or newer on the Home Assistant host.
+- Home Assistant `2026.7.0` or newer from the `2026.x` line.
+- Python `3.14.2` or newer from the `3.14` line on the Home Assistant host.
 - A physical `cover` entity supporting position or tilt-position commands.
 - Correct Home Assistant location and time-zone configuration.
 
@@ -476,11 +533,12 @@ night position.
 | 110 | Control disabled | calculates the target but does not move the cover |
 | 105 | Window open | applies the selected window policy |
 | 100 | Rain / strong wind | uses the configured emergency position |
+| 98 | Minimum / maximum position | applies physical position limits |
 | 95 | Cold protection | closes the cover at night below the threshold |
 | 90 | Dawn protection | limits early sunlight during selected months |
 | 85 | Strict Sun Block | blocks strong direct sunlight in the window |
 | 80 | Night purge | opens the cover to the purge position |
-| 75 | Minimum / maximum position | applies physical position limits |
+| 70 | Schedule / night-purge end | restores the configured night position |
 | 60 | Thermal Hold | retains shading after recent direct sun |
 | 50 | Night mode | uses the sunset position |
 | 40 | Sun shadow | returns to the default position |
@@ -491,6 +549,19 @@ rule and candidates overridden by higher priority.
 
 ## Climate functions
 
+### Low radiation
+
+In climate mode, the current lux or irradiance signal takes precedence over the
+forecast alone. When `low_light=true` and `thermal_stress=0`, the integration
+uses the default position even if the forecast classified the day as summer.
+Positive thermal stress still retains protection, for example when outdoor air
+is hotter than the room.
+
+If a configured indoor-temperature sensor is unavailable, the integration does
+not replace it with the outdoor temperature. Thermal protection remains
+inactive until a reliable indoor reading returns, and diagnostics report
+`temperature_source=inside_unavailable`.
+
 ### Night purge
 
 Night purge operates between sunset and `night_purge_end_time` when the room is
@@ -498,7 +569,13 @@ above its comfort threshold and outdoor air is cooler than the room. At the
 deadline, the integration applies the configured night position. A restart or
 reload after the deadline but before the daily schedule starts immediately
 catches up the missed close. Cold, rain and wind protection remain higher
-priority.
+priority. Cold protection uses a `1°C` hysteresis: once activated below the
+configured threshold, it remains active until the outdoor temperature reaches
+the threshold plus `1°C`.
+An outdoor-temperature jump greater than `3°C` must persist for five minutes.
+Shorter spikes are rejected before cold protection and night purge are
+evaluated. Diagnostics expose the raw and accepted values, the pending
+candidate and the rejected-reading count.
 
 ### Thermal Hold
 
@@ -519,7 +596,8 @@ stress is no longer present.
 Strict Sun Block requires a current numeric irradiance or lux reading above its
 activation threshold. `unknown`, `unavailable` and missing readings are not
 treated as strong sunlight. During Home Assistant startup, the integration waits
-for entities to settle before it can send its first command.
+for `async_at_started` and for entities to settle before it can send its first
+command. The same lifecycle path is used when the integration is reloaded.
 
 ## Open-window policies
 
@@ -537,6 +615,9 @@ manually adjusted cover remains outside automation for none, 15, 30, 60, 120
 or 240 minutes, or until sunset. Intermediate `opening` and `closing` states can
 be ignored. The reset button restores the current safe target and waits up to
 120 seconds for completion.
+Position reports received for two minutes after a command are attributed to the
+integration's own movement. A duplicate final report is compared with the last
+physical target instead of a newer automation calculation.
 
 The override deadline is stored as one fixed timestamp. The “until sunset”
 variant does not shrink on each refresh and selects the next sunset when the
@@ -551,11 +632,14 @@ manual override updates:
 - a comfort-temperature offset limited to `-3...+3°C`,
 - the override counter.
 
-Learning is applied only to comfort decisions. It cannot alter rain, wind,
-cold-protection or Strict Sun Block targets. **Reset Behavioral Learning**
-clears all learned values for the entry.
+Learning is applied only during the active adaptive schedule and only to comfort
+decisions. It cannot alter rain, wind, cold-protection or Strict Sun Block
+targets. **Reset Behavioral Learning** clears all learned values for the entry.
 The last direct-sun timestamp is persisted separately across Home Assistant
 restarts, preserving Thermal Hold context.
+The movement and schedule guard upgrade resets older learned offsets once
+because they may have been created from intermediate motor reports or movement
+outside the adaptive schedule. The direct-sun timestamp is retained.
 
 ## Schedule and time-source precedence
 
@@ -564,9 +648,10 @@ Workday entity is configured, then universal `start_time`. An unavailable
 Workday entity is not silently treated as a weekend.
 
 End-time precedence is: configured end entity, explicit `end_time`, then sunset
-plus `close_sunset_offset`. The sunset-offset number entity is exposed only for
-solar closing. Earlier schedule changes and deadlines missed during a restart
-are handled on the next refresh.
+plus `close_sunset_offset`. The sunset-offset number entity remains available
+after switching the end-time source, but affects the schedule only for solar
+closing. Earlier schedule changes and deadlines missed during a restart are
+handled on the next refresh.
 
 ## Motor protection and retry
 
@@ -672,10 +757,11 @@ contains:
 - current decision and up to 50 recent decisions,
 - `decision_trace` with evaluated priorities,
 - current position, error, tolerance and `target_satisfied`,
-- recent commands, service errors and movement history,
+- recent commands and their timestamps, service errors and movement history,
 - retry task state and deadlines,
 - coordinator health and refresh timing,
-- schedule, forecast cache and night-purge state,
+- schedule, forecast cache, `low_light`, seasonal mode, night-purge state and
+  cold-protection thresholds,
 - freshness of every related Home Assistant entity,
 - BehavioralLearner load, save and override information.
 
@@ -695,11 +781,37 @@ Review paths, entity IDs and state context before sharing diagnostics publicly.
 `position_delta_too_small` usually means the target is already satisfied within
 the configured tolerance, not that automation failed.
 
+## Architecture 1.6
+
+Every refresh uses one execution path:
+
+`event/timer -> input snapshot -> candidates -> arbiter -> limits and runtime policies -> movement.py -> cover service`
+
+- `coordinator.py` composes dependencies, while `coordinator_pipeline.py`
+  runs the short phases of one update cycle.
+- `coordinator_events.py` owns refresh causes, entity events and timers.
+- `coordinator_data.py` reads HA values once and builds the input snapshot.
+- `geometry.py` computes solar geometry, while `climate.py` creates candidates
+  without reading `hass.states` directly.
+- `decision.py` owns priority arbitration, the decision trace and physical
+  position constraints.
+- `coordinator_execution.py` applies runtime policies.
+- `movement.py` is the only gateway for `cover` service calls, verification and
+  retries.
+- `manual_control.py`, `learning.py`, `schedule.py`, `models.py` and
+  `options.py` hold independent domain policies.
+
+Refresh causes use a monotonic generation. When a newer event arrives while a
+group is being controlled, remaining stale targets are skipped and the next
+cycle evaluates the latest conditions. The night-purge deadline never sends a
+position directly.
+
 ## Development and validation
 
 ```powershell
 .\.venv\Scripts\ruff.exe check --no-cache custom_components\adaptive_cover tests
-.\.venv\Scripts\python.exe -m unittest discover -s tests -v
+.\.venv\Scripts\ruff.exe format --check custom_components\adaptive_cover tests
+.\.venv\Scripts\python.exe tests\run_pytest.py -q
 .\.venv\Scripts\python.exe -m compileall -q custom_components\adaptive_cover tests
 ```
 

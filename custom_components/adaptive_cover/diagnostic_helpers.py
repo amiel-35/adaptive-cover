@@ -6,9 +6,17 @@ from datetime import datetime
 import re
 
 DATE_PREFIX_PATTERN = re.compile(r"^\d{2}\.\d{2}\.\d{4}_")
+UNAVAILABLE_STATES = frozenset({"unknown", "unavailable"})
 
 
-def dated_filename(filename: str, now_local: datetime, include_date: bool = True) -> str:
+def entity_state_available(state: str | None) -> bool:
+    """Rozpoznaj stan encji, którego można użyć w obliczeniach."""
+    return state is not None and state.lower() not in UNAVAILABLE_STATES
+
+
+def dated_filename(
+    filename: str, now_local: datetime, include_date: bool = True
+) -> str:
     """Return an export filename with one current local-date prefix."""
     if not include_date:
         return filename

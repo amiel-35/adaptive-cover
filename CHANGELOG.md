@@ -12,7 +12,7 @@ All notable changes to this project will be documented in this file.
 - [Zmienione] Workflowy używają `actions/checkout@v5`, zgodnego z runtime Node.js 24 na GitHub Actions.
 
 ### Naprawione
-- [Naprawione] `strings.json` zawiera pełne pola i opisy konfiguracji automatyki okna, zgodne z konfiguracją oraz tłumaczeniami.
+- [Naprawione] `strings.json` zawiera pełne pola i opisy konfiguracji automatyki okna, zarówno przy tworzeniu, jak i edycji wpisu, zgodne z konfiguracją oraz tłumaczeniami.
 - [Naprawione] Usunięto błędnie zagnieżdżone tłumaczenie harmonogramu z encji statusu algorytmu w wersjach PL i EN.
 - [Naprawione] Integracja deklaruje `CONFIG_SCHEMA` właściwy dla konfiguracji wyłącznie przez wpisy konfiguracyjne, wymagany przez Hassfest.
 - [Naprawione] Krótkie błędne skoki wspólnego czujnika temperatury zewnętrznej z około `19°C` do `7,1°C` lub `6,5°C` nie przełączają już rolet między ochroną przed zimnem `0%` i nocnym przewietrzaniem `40/41%`.

@@ -185,9 +185,14 @@ class AdaptiveDataUpdateCoordinator(DataUpdateCoordinator[AdaptiveCoverData]):
         # event first, so users can hook a warning before the cover actually
         # moves. 0 disables the feature entirely. Cancelled entries in
         # self._pending_close are covers currently waiting out that delay.
-        self._notify_delay = self.config_entry.options.get(CONF_NOTIFY_DELAY, 0)
-        self._notify_threshold = self.config_entry.options.get(
-            CONF_NOTIFY_THRESHOLD, 20
+        # NumberSelector round-trips as a float (e.g. 60.0); cast once here
+        # so every consumer (the event payload, async_call_later) gets a
+        # plain int rather than a "close in 60.0s" event.
+        self._notify_delay = int(
+            self.config_entry.options.get(CONF_NOTIFY_DELAY, 0)
+        )
+        self._notify_threshold = int(
+            self.config_entry.options.get(CONF_NOTIFY_THRESHOLD, 20)
         )
         self._pending_close: dict[str, CALLBACK_TYPE] = {}
         self.config_entry.async_on_unload(self._async_cancel_pending_close_notices)
@@ -485,6 +490,26 @@ class AdaptiveDataUpdateCoordinator(DataUpdateCoordinator[AdaptiveCoverData]):
            short-circuit the delay by falling through to case 3 below.
         3. Target is at/below the threshold and nothing is pending: schedule
            a new notice (or apply immediately if notifications are off).
+
+        Two known, deliberately-accepted limitations, rather than silently
+        left unhandled:
+
+        - If the cover's current position can't be read (case 3, ``current
+          is None``), a notice is fired on the safe assumption that it's
+          worth a heads-up. ``async_set_manual_position`` may then no-op at
+          apply time (it also can't confirm the position differs), so the
+          event can rarely announce a move that doesn't actually happen. The
+          alternative — staying silent whenever the position is unknown — was
+          judged worse: it would mean never warning at all for a cover whose
+          state is flaky, which is exactly when a warning matters most.
+        - A very long delay (up to 600s) applies the position computed
+          *when the notice was scheduled*; case 2 doesn't refresh it if the
+          decision's magnitude changes while still below the threshold (a
+          higher, still-closing value doesn't retrigger case 1). The error
+          this can introduce is bounded to the [0, notify_threshold] range,
+          and is expected to matter only at delays well past what anyone
+          would realistically configure for a "you're about to be shut out"
+          warning.
         """
         if state > self._notify_threshold:
             self._cancel_pending_close(entity)
@@ -531,6 +556,16 @@ class AdaptiveDataUpdateCoordinator(DataUpdateCoordinator[AdaptiveCoverData]):
 
         async def _apply_after_delay(_now) -> None:
             self._pending_close.pop(entity, None)
+            if not self.control_toggle:
+                # The whole point of the notice is to give someone a window
+                # to react — turning adaptive control off during that window
+                # is exactly the reaction it's meant to allow for.
+                self.logger.debug(
+                    "Skipping delayed close of %s: control toggle turned "
+                    "off during the notice delay",
+                    entity,
+                )
+                return
             if self.manager.is_cover_manual(entity):
                 self.logger.debug(
                     "Skipping delayed close of %s: manual override started "
@@ -590,12 +625,21 @@ class AdaptiveDataUpdateCoordinator(DataUpdateCoordinator[AdaptiveCoverData]):
         ``manager.mark_manual_control`` — security is not a user gesture and
         must not block the automatic return to adaptive positioning when
         presence is restored.
+
+        It also does NOT go through the pre-close notification delay: security
+        mode means "nobody's home, secure the house now" — waiting out
+        CONF_NOTIFY_DELAY (up to 10 minutes) would defeat the point. It DOES
+        cancel any notice already counting down for this entity, so a stale
+        timer can't re-apply an outdated target position after security has
+        already moved the cover.
         """
         if self.manager.is_cover_manual(entity):
             self.logger.debug(
                 "Security mode: skipping %s (manual override active)", entity
             )
             return
+
+        self._cancel_pending_close(entity)
 
         if self._climate_mode and self.control_method in ("intermediate", "winter"):
             pos = options.get(CONF_MIN_POSITION) or 0

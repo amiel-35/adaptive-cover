@@ -27,6 +27,7 @@
           "end_entity": "Entité indiquant la fin de periode",
           "manual_threshold": "Seuil de detection pour le mode manuel",
           "manual_ignore_intermediate": "Ignore les postions intermediares durant le mode manuel (ouverture & fermeture)",
+          "never_auto_correct": "Ne jamais corriger après une commande manuelle",
           "return_sunset": "Toujours ajuster la position en fonction du coucher de soleil à la fin ; utile si l'heure de fin est antérieure au coucher du soleil réel"
         },
         "data_description": {
@@ -264,6 +265,7 @@
             "end_entity": "Entité indiquant l'heure de fin",
             "manual_threshold": "Seuil de commande manuelle",
             "manual_ignore_intermediate": "Ignorer les positions intermédiaires pendant la commande manuelle (ouverture et fermeture)",
+            "never_auto_correct": "Ne jamais corriger après une commande manuelle",
             "return_sunset": "Toujours ajuster la position à la valeur par défaut du coucher du soleil à l'heure de fin ; utile si l'heure de fin est antérieure au coucher du soleil réel"
           },
         "data_description": {

@@ -77,6 +77,7 @@ from .const import (
     CONF_MAX_POSITION,
     CONF_MIN_ELEVATION,
     CONF_MIN_POSITION,
+    CONF_NEVER_AUTO_CORRECT,
     CONF_OUTSIDE_THRESHOLD,
     CONF_OUTSIDETEMP_ENTITY,
     CONF_PRESENCE_ENTITY,
@@ -170,6 +171,10 @@ class AdaptiveDataUpdateCoordinator(DataUpdateCoordinator[AdaptiveCoverData]):
         self._climate_debug: dict | None = None
         self.ignore_intermediate_states = self.config_entry.options.get(
             CONF_MANUAL_IGNORE_INTERMEDIATE, False
+        )
+        # See #495 / CONF_NEVER_AUTO_CORRECT in const.py.
+        self.never_auto_correct = self.config_entry.options.get(
+            CONF_NEVER_AUTO_CORRECT, False
         )
         self._update_listener = None
         self._scheduled_time = dt.datetime.now()
@@ -299,7 +304,14 @@ class AdaptiveDataUpdateCoordinator(DataUpdateCoordinator[AdaptiveCoverData]):
         self.logger.debug("Determined default state to be %s", self.default_state)
         state = self.state
 
-        await self.manager.reset_if_needed()
+        # See #495: covers flagged never_auto_correct never get their manual
+        # override cleared by the duration-based timer — only an explicit
+        # action (the "reset manual override" button/service, which calls
+        # manager.reset() directly and is unaffected by this) hands control
+        # back. Everything else in this refresh — target position sensor
+        # included — keeps computing normally either way.
+        if not self.never_auto_correct:
+            await self.manager.reset_if_needed()
 
         if (
             self._end_time
@@ -544,6 +556,7 @@ class AdaptiveDataUpdateCoordinator(DataUpdateCoordinator[AdaptiveCoverData]):
             CONF_MANUAL_OVERRIDE_DURATION, {"minutes": 15}
         )
         self.manual_threshold = options.get(CONF_MANUAL_THRESHOLD)
+        self.never_auto_correct = options.get(CONF_NEVER_AUTO_CORRECT, False)
         self.start_value = options.get(CONF_INTERP_START)
         self.end_value = options.get(CONF_INTERP_END)
         self.normal_list = options.get(CONF_INTERP_LIST)

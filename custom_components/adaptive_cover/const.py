@@ -73,6 +73,16 @@ CONF_MANUAL_OVERRIDE_RESET = "manual_override_reset"
 CONF_MANUAL_THRESHOLD = "manual_threshold"
 CONF_MANUAL_IGNORE_INTERMEDIATE = "manual_ignore_intermediate"
 
+# "Escape" covers — see #495. A manually-overridden cover normally resumes
+# automatic control on its own once CONF_MANUAL_OVERRIDE_DURATION elapses.
+# When this is on, that automatic resume never happens for this entry's
+# covers: manual control is held indefinitely, until an explicit action
+# (the existing "reset manual override" button/service, or toggling control
+# off then on) hands control back. Nothing else changes — the target
+# position sensor keeps computing normally throughout, only the actual
+# cover.set_cover_position calls are withheld.
+CONF_NEVER_AUTO_CORRECT = "never_auto_correct"
+
 # Security mode — closes covers when nobody is home.
 # The value is NOT stored in config options; the switch entity manages the
 # runtime toggle directly on the coordinator (``coordinator.security_toggle``).

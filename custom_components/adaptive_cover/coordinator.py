@@ -16,13 +16,14 @@ from homeassistant.const import (
     SERVICE_SET_COVER_TILT_POSITION,
 )
 from homeassistant.core import (
+    CALLBACK_TYPE,
     Event,
     EventStateChangedData,
     HomeAssistant,
     State,
     callback,
 )
-from homeassistant.helpers.event import async_track_point_in_time
+from homeassistant.helpers.event import async_call_later, async_track_point_in_time
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from .config_context_adapter import ConfigContextAdapter
@@ -77,6 +78,8 @@ from .const import (
     CONF_MAX_POSITION,
     CONF_MIN_ELEVATION,
     CONF_MIN_POSITION,
+    CONF_NOTIFY_DELAY,
+    CONF_NOTIFY_THRESHOLD,
     CONF_OUTSIDE_THRESHOLD,
     CONF_OUTSIDETEMP_ENTITY,
     CONF_PRESENCE_ENTITY,
@@ -96,6 +99,7 @@ from .const import (
     CONF_WEATHER_ENTITY,
     CONF_WEATHER_STATE,
     DOMAIN,
+    EVENT_WILL_CLOSE,
     LOGGER,
 )
 from .helpers import get_datetime_from_str, get_last_updated, get_safe_state, is_presence_detected
@@ -175,6 +179,18 @@ class AdaptiveDataUpdateCoordinator(DataUpdateCoordinator[AdaptiveCoverData]):
         self._scheduled_time = dt.datetime.now()
 
         self._cached_options = None
+
+        # Pre-close notification (see EVENT_WILL_CLOSE): a target position at
+        # or below the threshold is delayed by this many seconds, firing an
+        # event first, so users can hook a warning before the cover actually
+        # moves. 0 disables the feature entirely. Cancelled entries in
+        # self._pending_close are covers currently waiting out that delay.
+        self._notify_delay = self.config_entry.options.get(CONF_NOTIFY_DELAY, 0)
+        self._notify_threshold = self.config_entry.options.get(
+            CONF_NOTIFY_THRESHOLD, 20
+        )
+        self._pending_close: dict[str, CALLBACK_TYPE] = {}
+        self.config_entry.async_on_unload(self._async_cancel_pending_close_notices)
 
     async def async_config_entry_first_refresh(self) -> None:
         """Config entry first refresh."""
@@ -446,8 +462,72 @@ class AdaptiveDataUpdateCoordinator(DataUpdateCoordinator[AdaptiveCoverData]):
             await self.async_set_position(entity, state)
 
     async def async_set_position(self, entity, state: int):
-        """Call service to set cover position."""
+        """Call service to set cover position.
+
+        If pre-close notification is configured (CONF_NOTIFY_DELAY > 0) and
+        this move crosses into "closing" territory, the move is delayed and
+        EVENT_WILL_CLOSE is fired first — see _schedule_close_notice.
+        """
+        if self._should_notify_before_close(entity, state):
+            self._schedule_close_notice(entity, state)
+            return
         await self.async_set_manual_position(entity, state)
+
+    def _should_notify_before_close(self, entity: str, state: int) -> bool:
+        """Return True if this move should be delayed with a pre-close notice.
+
+        Only true on the transition into closing territory — current
+        position unknown or above the threshold, target at or below it —
+        so we don't re-fire on every refresh that recomputes the same low
+        target, and not while a notice for this entity is already pending.
+        """
+        if self._notify_delay <= 0 or state > self._notify_threshold:
+            return False
+        if entity in self._pending_close:
+            return False
+        current = self._get_current_position(entity)
+        return current is None or current > self._notify_threshold
+
+    def _schedule_close_notice(self, entity: str, state: int) -> None:
+        """Fire EVENT_WILL_CLOSE, then apply the position after the delay."""
+        self.hass.bus.async_fire(
+            EVENT_WILL_CLOSE,
+            {
+                "entity_id": entity,
+                "target_position": state,
+                "reason": self.control_method,
+                "delay_seconds": self._notify_delay,
+            },
+        )
+        self.logger.debug(
+            "Delaying close of %s to %s%% by %ss (reason=%s)",
+            entity,
+            state,
+            self._notify_delay,
+            self.control_method,
+        )
+
+        async def _apply_after_delay(_now) -> None:
+            self._pending_close.pop(entity, None)
+            if self.manager.is_cover_manual(entity):
+                self.logger.debug(
+                    "Skipping delayed close of %s: manual override started "
+                    "during the notice delay",
+                    entity,
+                )
+                return
+            await self.async_set_manual_position(entity, state)
+
+        self._pending_close[entity] = async_call_later(
+            self.hass, self._notify_delay, _apply_after_delay
+        )
+
+    @callback
+    def _async_cancel_pending_close_notices(self) -> None:
+        """Cancel any pending delayed close when the entry unloads."""
+        for cancel in self._pending_close.values():
+            cancel()
+        self._pending_close.clear()
 
     async def async_set_manual_position(self, entity, state):
         """Call service to set cover position."""

@@ -438,14 +438,16 @@ class AdaptiveDataUpdateCoordinator(DataUpdateCoordinator[AdaptiveCoverData]):
                 if self.security_active:
                     await self._apply_security_position(cover, options)
                 else:
-                    await self.async_set_manual_position(
-                        cover,
-                        (
-                            inverse_state(options.get(CONF_SUNSET_POS))
-                            if self._inverse_state
-                            else options.get(CONF_SUNSET_POS)
-                        ),
+                    sunset_position = (
+                        inverse_state(options.get(CONF_SUNSET_POS))
+                        if self._inverse_state
+                        else options.get(CONF_SUNSET_POS)
                     )
+                    # Routed through async_set_position (not called directly)
+                    # so the sunset close is subject to the same pre-close
+                    # notification as any other close — this is, in fact,
+                    # the scenario CONF_NOTIFY_DELAY exists for.
+                    await self.async_set_position(cover, sunset_position)
         else:
             self.logger.debug("Timed refresh but control toggle is off")
         self.timed_refresh = False
@@ -467,26 +469,46 @@ class AdaptiveDataUpdateCoordinator(DataUpdateCoordinator[AdaptiveCoverData]):
         If pre-close notification is configured (CONF_NOTIFY_DELAY > 0) and
         this move crosses into "closing" territory, the move is delayed and
         EVENT_WILL_CLOSE is fired first — see _schedule_close_notice.
+
+        Three cases, handled in this order:
+
+        1. Target is above the notify threshold ("opening" or "not closing"
+           enough to matter): any pending close for this entity is a stale
+           decision that's just been superseded — cancel it, then apply the
+           new, safer position right away. This is deliberately unconditional
+           (not gated behind a threshold check first) so a legitimate "open
+           back up" decision is never swallowed by an in-flight close timer.
+        2. Target is at/below the threshold and a close is already counting
+           down for this entity: do nothing. Letting the existing timer run
+           to completion is the whole point — without this, the very next
+           refresh cycle that reaches the same "close" conclusion would
+           short-circuit the delay by falling through to case 3 below.
+        3. Target is at/below the threshold and nothing is pending: schedule
+           a new notice (or apply immediately if notifications are off).
         """
-        if self._should_notify_before_close(entity, state):
-            self._schedule_close_notice(entity, state)
+        if state > self._notify_threshold:
+            self._cancel_pending_close(entity)
+            await self.async_set_manual_position(entity, state)
             return
+        if entity in self._pending_close:
+            return
+        if self._notify_delay > 0:
+            current = self._get_current_position(entity)
+            if current is None or current > self._notify_threshold:
+                self._schedule_close_notice(entity, state)
+                return
         await self.async_set_manual_position(entity, state)
 
-    def _should_notify_before_close(self, entity: str, state: int) -> bool:
-        """Return True if this move should be delayed with a pre-close notice.
-
-        Only true on the transition into closing territory — current
-        position unknown or above the threshold, target at or below it —
-        so we don't re-fire on every refresh that recomputes the same low
-        target, and not while a notice for this entity is already pending.
-        """
-        if self._notify_delay <= 0 or state > self._notify_threshold:
-            return False
-        if entity in self._pending_close:
-            return False
-        current = self._get_current_position(entity)
-        return current is None or current > self._notify_threshold
+    def _cancel_pending_close(self, entity: str) -> None:
+        """Cancel and drop a pending close notice for entity, if any."""
+        cancel = self._pending_close.pop(entity, None)
+        if cancel is not None:
+            cancel()
+            self.logger.debug(
+                "Cancelled pending close notice for %s: superseded by a "
+                "newer, non-closing decision",
+                entity,
+            )
 
     def _schedule_close_notice(self, entity: str, state: int) -> None:
         """Fire EVENT_WILL_CLOSE, then apply the position after the delay."""

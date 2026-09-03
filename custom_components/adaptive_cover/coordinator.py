@@ -423,7 +423,14 @@ class AdaptiveDataUpdateCoordinator(DataUpdateCoordinator[AdaptiveCoverData]):
     async def async_handle_timed_refresh(self, options):
         """Handle timed refresh (sunset position).
 
-        Security mode overrides the sunset position when active.
+        Security mode overrides the sunset position when active. Covers
+        under manual override are left alone — this path used to skip that
+        check (unlike async_handle_first_refresh, a few lines up, which
+        already respected it), so a cover someone had just opened by hand
+        could get force-closed the moment end_time/sunset hit regardless.
+        Fixed independently of never_auto_correct (CONF_NEVER_AUTO_CORRECT):
+        manual override should mean "leave it alone" on every path that
+        writes a position, not just some of them.
         """
         self.logger.debug(
             "This is a timed refresh, using sunset position: %s",
@@ -433,7 +440,7 @@ class AdaptiveDataUpdateCoordinator(DataUpdateCoordinator[AdaptiveCoverData]):
             for cover in self.entities:
                 if self.security_active:
                     await self._apply_security_position(cover, options)
-                else:
+                elif not self.manager.is_cover_manual(cover):
                     await self.async_set_manual_position(
                         cover,
                         (
@@ -441,6 +448,11 @@ class AdaptiveDataUpdateCoordinator(DataUpdateCoordinator[AdaptiveCoverData]):
                             if self._inverse_state
                             else options.get(CONF_SUNSET_POS)
                         ),
+                    )
+                else:
+                    self.logger.debug(
+                        "Timed refresh: skipping %s (manual override active)",
+                        cover,
                     )
         else:
             self.logger.debug("Timed refresh but control toggle is off")
